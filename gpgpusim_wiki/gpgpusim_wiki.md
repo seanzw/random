@@ -4,6 +4,13 @@
 
 *Meaning of config fields and statistics and how they relate to real gpu metrics*
 
+| 5090 |  gpgpu-sim config  |  Value |
+| -- | -- | -- |
+| multiprocessor_count | gpgpu_n_clusters | 170 |
+| base clock, memory_clock_rate | gpgpu_clock_domains | 2010:2010:2010:14000 |
+| limits_max_cta_per_sm | gpgpu_shader_cta | 24 |
+
+
 ## Code Reading
 
 *E.g. key functions, calling chain for a memory access, how the memory bandwidth is modeled, etc.*
