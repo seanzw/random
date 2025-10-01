@@ -73,17 +73,11 @@ __global__ void tma_bw_kernel(const uint8_t *__restrict__ src,
   __shared__ unsigned long long fwd_bar[Stages];
   __shared__ unsigned long long bwd_bar[Stages];
 
-  unsigned fwd_par[Stages];
-  unsigned bwd_par[Stages];
   if (threadIdx.x == 0) {
     for (int s = 0; s < Stages; ++s) {
       mbarrier_init(&fwd_bar[s], 1);
       mbarrier_init(&bwd_bar[s], 1);
     }
-  }
-  for (int s = 0; s < Stages; ++s) {
-    fwd_par[s] = 1;
-    bwd_par[s] = 0; // mark free initially
   }
   __syncthreads();
 
@@ -94,18 +88,14 @@ __global__ void tma_bw_kernel(const uint8_t *__restrict__ src,
 
   // Producer: wait for slot to be free, then issue copy
   if (threadIdx.x == PRODUCER_THREAD) {
-    for (size_t i = blockIdx.x; i < total_chunks; i += gridDim.x) {
-      const int slot = int(i % Stages);
+    for (size_t i = blockIdx.x, stage_idx = 0; i < total_chunks;
+         i += gridDim.x, stage_idx++) {
+      const int slot = int(stage_idx % Stages);
       uint8_t *dst_slot = smem + slot * CHUNK_BYTES;
       const uint8_t *src_chunk = src + i * CHUNK_BYTES;
 
-      unsigned want_free = bwd_par[slot] ^ 1;
-      //   printf("Th %d waiting for bwd_bar[%d] to be %d\n", threadIdx.x, slot,
-      //          want_free);
+      unsigned want_free = (stage_idx % (Stages * 2)) < Stages;
       wait(&bwd_bar[slot], want_free);
-      //   printf("Th %d got bwd_bar[%d] to be %d\n", threadIdx.x, slot,
-      //   want_free);
-      bwd_par[slot] = want_free;
 
       mbarrier_arrive_expect_tx(&fwd_bar[slot], CHUNK_BYTES);
       cp_async_bulk<CHUNK_BYTES>(dst_slot, src_chunk, &fwd_bar[slot]);
@@ -114,16 +104,13 @@ __global__ void tma_bw_kernel(const uint8_t *__restrict__ src,
 
   // Consumer: wait for data ready, then consume and free slot
   else if (threadIdx.x == CONSUMER_THREAD) {
-    for (size_t i = blockIdx.x; i < total_chunks; i += gridDim.x) {
-      const int slot = int(i % Stages);
+    for (size_t i = blockIdx.x, stage_idx = 0; i < total_chunks;
+         i += gridDim.x, stage_idx++) {
+      const int slot = int(stage_idx % Stages);
       uint8_t *dst_slot = smem + slot * CHUNK_BYTES;
-      unsigned want_ready = fwd_par[slot] ^ 1;
-      //   printf("Th %d waiting for fwd_bar[%d] to be %d\n", threadIdx.x, slot,
-      //          want_ready);
+
+      unsigned want_ready = (stage_idx % (Stages * 2)) >= Stages;
       wait(&fwd_bar[slot], want_ready);
-      //   printf("Th %d got fwd_bar[%d] to be %d\n", threadIdx.x, slot,
-      //   want_ready);
-      fwd_par[slot] = want_ready;
 
       auto p32 = reinterpret_cast<const int *>(dst_slot);
       sum += *p32;
@@ -213,7 +200,7 @@ int main() {
 
   // Query GPU for maximum number of SMs
   int num_sms = 0;
-  check(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, 0), 
+  check(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, 0),
         "get SM count");
   printf("Detected %d SMs on GPU\n", num_sms);
 
