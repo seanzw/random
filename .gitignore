@@ -1,3 +1,4 @@
 *.out
 *.log
 *.ncu-rep
+.venv
