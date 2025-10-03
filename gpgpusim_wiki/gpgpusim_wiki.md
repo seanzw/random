@@ -8,9 +8,14 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 
 | 5090 |  GPGPU-sim |  Config Value | Note |
 | -- | -- | -- | -- |
-| multiprocessor_count | gpgpu_n_clusters | 170 | |
-| base clock, memory_clock_rate | gpgpu_clock_domains | 2010:2010:2010:14000 | \<Core Clock\>:\<Interconnect Clock\>:\<L2 Clock\>:\<DRAM Clock\>  |
+| # SM | gpgpu_n_clusters | 170 | |
+| base clock, memory_clock_rate | gpgpu_clock_domains \<Core Clock\>:\<Interconnect Clock\>:\<L2 Clock\>:\<DRAM Clock\> | 2010:2010:2010:14000 | Core & DRAM clock are confirmed by doc; interconnect & L2 clock just maintained the original convention (same as core clock), not confirmed.  |
 | limits_max_cta_per_sm | gpgpu_shader_cta | 24 | |
+| # memory controller | gpgpu_n_mem | 16 | |
+| single DRAM bandwidth | gpgpu_dram_buswidth | 4 | |
+| L2 cache | gpgpu_cache:dl2 \<nsets\>:\<bsize\>:\<assoc\>,\<rep\>:\<wr\>:\<alloc\>:\<wr_alloc\>,\<mshr\>:\<N\>:\<merge\>,\<mq\> | S:1536:128:32,L:B:m:L:P,A:192:4,32:0,32 | Only adjusted to make sure \<nsets\>x\<bsize\>x\<assoc\>x\<# memory controller\> = 96MB. Specific value of all fields is not confirmed. |
+
+[Caution] GPGPU-sim's L2 cache does not model sectors, potentially leading to significant performance discrepancies.
 
 
 ## Code Reading
