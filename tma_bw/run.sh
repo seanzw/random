@@ -11,7 +11,7 @@ fi
 echo ""
 echo "Running bandwidth comparison test..."
 ./bandwidth_test.out > bw_result.log
-python process.py -i bw_result.log -o tma_bw_result.png --peak-bw 5.6
+python process.py -i bw_result.log -o bw_result.png --peak-bw 5.6
 
 echo ""
 echo "Test completed!"

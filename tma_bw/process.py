@@ -174,7 +174,7 @@ def main():
                 ax.set_yticks([])
 
     plt.tight_layout()
-    plt.suptitle('Memory Bandwidth and Utilization Comparison', fontsize=16, y=0.98)
+    # plt.suptitle('Memory Bandwidth and Utilization Comparison', fontsize=16, y=0.98)
     
     # Save the figure
     plt.savefig(args.output, dpi=300, bbox_inches='tight')
