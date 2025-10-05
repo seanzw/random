@@ -1,6 +1,6 @@
 NVCC_FLAGS = -std=c++17 -arch=sm_120 -O3
 
-bandwidth_test.out: bandwidth_test.cu kernels_common.cuh tma_kernels.cuh cp_async_kernels.cuh benchmark_framework.cuh
+bandwidth_test.out: bandwidth_test.cu kernels_common.cuh tma_kernels.cuh cp_kernels.cuh benchmark_framework.cuh
 	nvcc $(NVCC_FLAGS) bandwidth_test.cu -o $@
 
 all: bandwidth_test.out

@@ -61,30 +61,43 @@ __device__ inline void epilogue_wait_and_signal(int stage_idx, int lane_id,
                                    integer_sequence<Is...>{});
 }
 
-template <int CHUNK_BYTES>
-__device__ inline void cp_async_chunk(uint8_t *dst_slot,
-                                      const uint8_t *src_chunk, int lane_id) {
+template <int CHUNK_BYTES, bool USE_CP_ASYNC = true>
+__device__ inline void cp_chunk(uint8_t *dst_slot, const uint8_t *src_chunk,
+                                int lane_id) {
   // Each thread in the warp copies a portion of the chunk
-  // Notice that the minimal transfer size of cp.async.cg is 16 bytes.
-  // ! We assume CHUNK_BYTES is divisble by cp_async_cg_bytes
+  if constexpr (USE_CP_ASYNC) {
+    // Notice that the minimal transfer size of cp.async.cg is 16 bytes.
+    // ! We assume CHUNK_BYTES is divisble by cp_async_cg_bytes
+    constexpr int cp_async_cg_bytes = 16;
+    static_assert(CHUNK_BYTES % cp_async_cg_bytes == 0,
+                  "CHUNK_BYTES must be divisible by cp_async_cg_bytes");
+    for (int b = lane_id * cp_async_cg_bytes; b < CHUNK_BYTES;
+         b += 32 * cp_async_cg_bytes) {
 
-  constexpr int cp_async_cg_bytes = 16;
-  static_assert(CHUNK_BYTES % cp_async_cg_bytes == 0,
-                "CHUNK_BYTES must be divisible by cp_async_cg_bytes");
-  for (int b = lane_id * cp_async_cg_bytes; b < CHUNK_BYTES;
-       b += 32 * cp_async_cg_bytes) {
+      const uint8_t *src_ptr = src_chunk + b;
+      uint8_t *dst_ptr = dst_slot + b;
+      cp_async_16(dst_ptr, src_ptr);
+    }
+  } else {
+    // Use normal load instruction with float4 (16 bytes)
+    constexpr int load_bytes = 16;
+    static_assert(CHUNK_BYTES % load_bytes == 0,
+                  "CHUNK_BYTES must be divisible by load_bytes");
+    for (int b = lane_id * load_bytes; b < CHUNK_BYTES; b += 32 * load_bytes) {
 
-    const uint8_t *src_ptr = src_chunk + b;
-    uint8_t *dst_ptr = dst_slot + b;
-    cp_async_16(dst_ptr, src_ptr);
+      const float4 *src_ptr = reinterpret_cast<const float4 *>(src_chunk + b);
+      float4 *dst_ptr = reinterpret_cast<float4 *>(dst_slot + b);
+      *dst_ptr = *src_ptr;
+    }
   }
 }
 
-// ---- cp.async Kernel with Multiple Producer Warps ----
-template <int Stages, int CHUNK_BYTES, int REPEAT, int NUM_PRODUCER_WARPS = 1>
-__global__ void cp_async_bw_kernel(const uint8_t *__restrict__ src,
-                                   unsigned long long *__restrict__ sink,
-                                   size_t total_bytes) {
+// ---- cp Kernel with Multiple Producer Warps ----
+template <int Stages, int CHUNK_BYTES, int REPEAT, int NUM_PRODUCER_WARPS = 1,
+          bool USE_CP_ASYNC = true>
+__global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
+                             unsigned long long *__restrict__ sink,
+                             size_t total_bytes) {
   extern __shared__ __align__(16) uint8_t smem[];
 
   __shared__ unsigned long long fwd_bar[Stages];
@@ -127,10 +140,12 @@ __global__ void cp_async_bw_kernel(const uint8_t *__restrict__ src,
       }
       __syncwarp();
 
-      cp_async_chunk<CHUNK_BYTES>(dst_slot, src_chunk, lane_id);
+      cp_chunk<CHUNK_BYTES, USE_CP_ASYNC>(dst_slot, src_chunk, lane_id);
 
-      // Wait for this warp's cp.async operations to complete
-      cp_async_wait_group<0>();
+      if constexpr (USE_CP_ASYNC) {
+        // Wait for this warp's cp.async operations to complete
+        cp_async_wait_group<0>();
+      }
       __syncwarp();
 
       // Each producer warp signals completion
