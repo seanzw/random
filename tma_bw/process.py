@@ -23,6 +23,16 @@ def parse_benchmark_file(filename):
         # Check for benchmark type headers
         if "TMA bulk" in line:
             current_benchmark = "TMA"
+        elif "Normal Load Bandwidth Test (1 Producer Warp)" in line:
+            current_benchmark = "normal_1_warp"
+        elif "Normal Load Bandwidth Test (2 Producer Warps)" in line:
+            current_benchmark = "normal_2_warps"
+        elif "Normal Load Bandwidth Test (4 Producer Warps)" in line:
+            current_benchmark = "normal_4_warps"
+        elif "Normal Load Bandwidth Test (8 Producer Warps)" in line:
+            current_benchmark = "normal_8_warps"
+        elif "Normal Load Bandwidth Test (16 Producer Warps)" in line:
+            current_benchmark = "normal_16_warps"
         elif "cp.async Bandwidth Test (1 Producer Warp)" in line:
             current_benchmark = "cp.async_1_warp"
         elif "cp.async Bandwidth Test (2 Producer Warps)" in line:
@@ -98,26 +108,44 @@ def main():
     # Convert to TB/s for utilization calculation
     peak_bw_tb = args.peak_bw
 
-    # Create the visualization with 4x2 subplots
-    # Each row represents a benchmark type, columns are bandwidth and utilization
-    fig, axes = plt.subplots(4, 2, figsize=(16, 20))
-    
-    # Define subplot titles and data mapping
+    # Define subplot configuration mapping - reordered to Normal loads, cp.async, TMA
     subplot_config = [
-        ("TMA", "TMA"),
+        ("normal_1_warp", "Normal Load (1 Producer)"),
+        ("normal_2_warps", "Normal Load (2 Producers)"),
+        ("normal_4_warps", "Normal Load (4 Producers)"),
+        ("normal_8_warps", "Normal Load (8 Producers)"),
+        ("normal_16_warps", "Normal Load (16 Producers)"),
         ("cp.async_1_warp", "cp.async (1 Producer)"),
         ("cp.async_2_warps", "cp.async (2 Producers)"),
-        ("cp.async_4_warps", "cp.async (4 Producers)")
+        ("cp.async_4_warps", "cp.async (4 Producers)"),
+        ("TMA", "TMA")
     ]
     
-    for row, (benchmark_key, title) in enumerate(subplot_config):
+    # Filter configuration to only include benchmarks that have data
+    available_configs = [(key, title) for key, title in subplot_config if key in benchmark_data]
+    num_configs = len(available_configs)
+    
+    print(f"Available configurations: {num_configs}")
+    for key, title in available_configs:
+        print(f"  - {title}")
+
+    # Create the visualization with dynamic number of rows based on available configurations
+    # Each row represents a benchmark type, columns are bandwidth and utilization
+    fig, axes = plt.subplots(num_configs, 2, figsize=(16, 5 * num_configs))
+    
+    # Handle the case where there's only one configuration (axes won't be 2D)
+    if num_configs == 1:
+        axes = axes.reshape(1, -1)
+    
+    for row, (benchmark_key, title) in enumerate(available_configs):
         if benchmark_key in benchmark_data:
             bw_matrix = benchmark_data[benchmark_key]
             util_matrix = bw_matrix / 1000 / peak_bw_tb * 100  # Convert GB/s to TB/s, then to percentage
             
             # Bandwidth heatmap - Column 0
             ax_bw = axes[row, 0]
-            im_bw = ax_bw.imshow(bw_matrix, cmap='viridis', aspect='auto')
+            max_bw = peak_bw_tb * 1000  # Convert TB/s to GB/s
+            im_bw = ax_bw.imshow(bw_matrix, cmap='viridis', aspect='auto', vmin=0, vmax=max_bw)
             ax_bw.set_xticks(range(len(stages)))
             ax_bw.set_xticklabels(stages)
             ax_bw.set_yticks(range(len(chunk_sizes)))
@@ -132,8 +160,8 @@ def main():
                     if not np.isnan(bw_matrix[i, j]):
                         ax_bw.text(j, i, f'{bw_matrix[i, j]:.0f}', 
                                 ha='center', va='center', fontweight='bold',
-                                fontsize=10,
-                                color='white' if bw_matrix[i, j] > np.nanmax(bw_matrix)/2 else 'black')
+                                fontsize=14,
+                                color='white' if bw_matrix[i, j] < max_bw/2 else 'black')
             
             # Add colorbar for bandwidth
             plt.colorbar(im_bw, ax=ax_bw, label='Bandwidth (GB/s)')
@@ -155,23 +183,11 @@ def main():
                     if not np.isnan(util_matrix[i, j]):
                         ax_util.text(j, i, f'{util_matrix[i, j]:.1f}%', 
                                 ha='center', va='center', fontweight='bold',
-                                fontsize=10,
-                                color='white' if util_matrix[i, j] > 50 else 'black')
+                                fontsize=14,
+                                color='white' if util_matrix[i, j] < 50 else 'black')
             
             # Add colorbar for utilization
             plt.colorbar(im_util, ax=ax_util, label='Utilization (%)')
-            
-        else:
-            # If benchmark data not found, show empty plots with message
-            for col in range(2):
-                ax = axes[row, col]
-                col_title = "Bandwidth" if col == 0 else "Utilization"
-                ax.text(0.5, 0.5, f'No data found for\n{title}\n{col_title}', 
-                       ha='center', va='center', transform=ax.transAxes,
-                       fontsize=12, bbox=dict(boxstyle="round", facecolor='lightgray'))
-                ax.set_title(f'{title} - {col_title}')
-                ax.set_xticks([])
-                ax.set_yticks([])
 
     plt.tight_layout()
     # plt.suptitle('Memory Bandwidth and Utilization Comparison', fontsize=16, y=0.98)
@@ -182,7 +198,7 @@ def main():
     
     # Print summary statistics for each benchmark
     print("\nPerformance Summary:")
-    for benchmark_key, title in subplot_config:
+    for benchmark_key, title in available_configs:
         if benchmark_key in benchmark_data:
             bw_matrix = benchmark_data[benchmark_key]
             peak_bw = np.nanmax(bw_matrix)

@@ -163,5 +163,39 @@ int main() {
   normal_load_bench_4.run_all_stages<8192, repeat, power_of_two_sequence_4>();
   normal_load_bench_4.run_all_stages<16384, repeat, power_of_two_sequence_4>();
 
+  // Normal load benchmarks with 8 producer warps (288 threads: 9 warps)
+  const dim3 normal_load_8_block(288);
+  using power_of_two_sequence_8 = power_of_two_sequence<8, 32>;
+  printf("\n=== Normal Load Bandwidth Test (8 Producer Warps) ===\n");
+  NormalLoadKernelWrapper<8> normal_load_wrapper_8;
+  BandwidthBenchmark normal_load_bench_8(test_data, grid, normal_load_8_block,
+                                         normal_load_wrapper_8,
+                                         "Normal load + 8 producer warps");
+
+  normal_load_bench_8.run_all_stages<256, repeat, power_of_two_sequence_8>();
+  normal_load_bench_8.run_all_stages<512, repeat, power_of_two_sequence_8>();
+  normal_load_bench_8.run_all_stages<1024, repeat, power_of_two_sequence_8>();
+  normal_load_bench_8.run_all_stages<2048, repeat, power_of_two_sequence_8>();
+  normal_load_bench_8.run_all_stages<4096, repeat, power_of_two_sequence_8>();
+  normal_load_bench_8.run_all_stages<8192, repeat, power_of_two_sequence_8>();
+  normal_load_bench_8.run_all_stages<16384, repeat, power_of_two_sequence_8>();
+
+  // Normal load benchmarks with 16 producer warps (544 threads: 17 warps)
+  const dim3 normal_load_16_block(544);
+  using power_of_two_sequence_16 = power_of_two_sequence<16, 32>;
+  printf("\n=== Normal Load Bandwidth Test (16 Producer Warps) ===\n");
+  NormalLoadKernelWrapper<16> normal_load_wrapper_16;
+  BandwidthBenchmark normal_load_bench_16(test_data, grid, normal_load_16_block,
+                                          normal_load_wrapper_16,
+                                          "Normal load + 16 producer warps");
+
+  normal_load_bench_16.run_all_stages<256, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16.run_all_stages<512, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16.run_all_stages<1024, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16.run_all_stages<2048, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16.run_all_stages<4096, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16.run_all_stages<8192, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16.run_all_stages<16384, repeat, power_of_two_sequence_16>();
+
   return 0;
 }
