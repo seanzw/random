@@ -147,12 +147,12 @@ def main():
             max_bw = peak_bw_tb * 1000  # Convert TB/s to GB/s
             im_bw = ax_bw.imshow(bw_matrix, cmap='viridis', aspect='auto', vmin=0, vmax=max_bw)
             ax_bw.set_xticks(range(len(stages)))
-            ax_bw.set_xticklabels(stages)
+            ax_bw.set_xticklabels(stages, fontsize=12)
             ax_bw.set_yticks(range(len(chunk_sizes)))
-            ax_bw.set_yticklabels([f'{cs}B' for cs in chunk_sizes])
-            ax_bw.set_xlabel('Number of Stages')
-            ax_bw.set_ylabel('Chunk Size')
-            ax_bw.set_title(f'{title} - Bandwidth (GB/s)')
+            ax_bw.set_yticklabels([f'{cs}B' for cs in chunk_sizes], fontsize=12)
+            ax_bw.set_xlabel('Number of Stages', fontsize=14, fontweight='bold')
+            ax_bw.set_ylabel('Chunk Size', fontsize=14, fontweight='bold')
+            ax_bw.set_title(f'{title} - Bandwidth (GB/s)', fontsize=16, fontweight='bold')
             
             # Add text annotations for bandwidth
             for i in range(len(chunk_sizes)):
@@ -164,18 +164,20 @@ def main():
                                 color='white' if bw_matrix[i, j] < max_bw/2 else 'black')
             
             # Add colorbar for bandwidth
-            plt.colorbar(im_bw, ax=ax_bw, label='Bandwidth (GB/s)')
+            cbar_bw = plt.colorbar(im_bw, ax=ax_bw, label='Bandwidth (GB/s)')
+            cbar_bw.set_label('Bandwidth (GB/s)', fontsize=12, fontweight='bold')
+            cbar_bw.ax.tick_params(labelsize=10)
             
             # Utilization heatmap - Column 1
             ax_util = axes[row, 1]
             im_util = ax_util.imshow(util_matrix, cmap='plasma', aspect='auto', vmin=0, vmax=100)
             ax_util.set_xticks(range(len(stages)))
-            ax_util.set_xticklabels(stages)
+            ax_util.set_xticklabels(stages, fontsize=12)
             ax_util.set_yticks(range(len(chunk_sizes)))
-            ax_util.set_yticklabels([f'{cs}B' for cs in chunk_sizes])
-            ax_util.set_xlabel('Number of Stages')
-            ax_util.set_ylabel('Chunk Size')
-            ax_util.set_title(f'{title} - Utilization (%)')
+            ax_util.set_yticklabels([f'{cs}B' for cs in chunk_sizes], fontsize=12)
+            ax_util.set_xlabel('Number of Stages', fontsize=14, fontweight='bold')
+            ax_util.set_ylabel('Chunk Size', fontsize=14, fontweight='bold')
+            ax_util.set_title(f'{title} - Utilization (%)', fontsize=16, fontweight='bold')
             
             # Add text annotations for utilization
             for i in range(len(chunk_sizes)):
@@ -187,7 +189,9 @@ def main():
                                 color='white' if util_matrix[i, j] < 50 else 'black')
             
             # Add colorbar for utilization
-            plt.colorbar(im_util, ax=ax_util, label='Utilization (%)')
+            cbar_util = plt.colorbar(im_util, ax=ax_util, label='Utilization (%)')
+            cbar_util.set_label('Utilization (%)', fontsize=12, fontweight='bold')
+            cbar_util.ax.tick_params(labelsize=10)
 
     plt.tight_layout()
     # plt.suptitle('Memory Bandwidth and Utilization Comparison', fontsize=16, y=0.98)
