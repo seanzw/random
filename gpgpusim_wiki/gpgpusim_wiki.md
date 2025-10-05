@@ -13,9 +13,8 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 | limits_max_cta_per_sm | gpgpu_shader_cta | 24 | |
 | # memory controller | gpgpu_n_mem | 16 | |
 | single DRAM bandwidth | gpgpu_dram_buswidth | 4 | |
-| L2 cache | gpgpu_cache:dl2 \<nsets\>:\<bsize\>:\<assoc\>,\<rep\>:\<wr\>:\<alloc\>:\<wr_alloc\>,\<mshr\>:\<N\>:\<merge\>,\<mq\> | S:1536:128:32,L:B:m:L:P,A:192:4,32:0,32 | Only adjusted to make sure \<nsets\>x\<bsize\>x\<assoc\>x\<# memory controller\> = 96MB. Specific value of all fields is not confirmed. |
+| L2 cache | gpgpu_cache:dl2 \<nsets\>:\<bsize\>:\<assoc\>,\<rep\>:\<wr\>:\<alloc\>:\<wr_alloc\>,\<mshr\>:\<N\>:\<merge\>,\<mq\> | S:1536:128:32,L:B:m:L:X,A:192:4,32:0,32 | Only adjusted to make sure \<nsets\>x\<bsize\>x\<assoc\>x\<# memory controller\> = 96MB. Specific values are not confirmed. Addr mapping policy changed to XOR since original method (hash) needs manual encoding, but current number of sets is too big. |
 
-[Caution] GPGPU-sim's L2 cache does not model sectors, potentially leading to significant performance discrepancies.
 
 
 ## Code Reading
