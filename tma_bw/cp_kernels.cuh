@@ -103,7 +103,7 @@ __device__ inline void cp_chunk(uint8_t *dst_slot, const uint8_t *src_chunk,
 
 // ---- cp Kernel with Multiple Producer Warps ----
 template <int Stages, int CHUNK_BYTES, int REPEAT, int NUM_PRODUCER_WARPS = 1,
-          CP_METHOD METHOD = CP_METHOD::CP_ASYNC>
+          int NUM_CONSUMER_WARPS = 1, CP_METHOD METHOD = CP_METHOD::CP_ASYNC>
 __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
                              unsigned long long *__restrict__ sink,
                              size_t total_bytes) {
@@ -135,8 +135,10 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
        producer_warp_chunk_idx_start) /
       producer_warp_chunk_idx_step;
 
-  const size_t consumer_warp_chunk_idx_start = blockIdx.x;
-  const size_t consumer_warp_chunk_idx_step = gridDim.x;
+  const int consumer_warp_id = warp_id - NUM_PRODUCER_WARPS;
+  const size_t consumer_warp_chunk_idx_start =
+      blockIdx.x + consumer_warp_id * gridDim.x;
+  const size_t consumer_warp_chunk_idx_step = NUM_CONSUMER_WARPS * gridDim.x;
   const size_t consumer_stages =
       (total_chunks * REPEAT + consumer_warp_chunk_idx_step - 1 -
        consumer_warp_chunk_idx_start) /
@@ -206,12 +208,12 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
   }
 
   // Consumer warp: wait for data ready, then consume and free slot
-  else if (warp_id == NUM_PRODUCER_WARPS) {
+  else if (warp_id >= NUM_PRODUCER_WARPS) {
 
     if (lane_id == 0) { // Only one thread for simplicity
 
       for (int stage_idx = 0; stage_idx < consumer_stages; stage_idx++) {
-        auto real_stage_idx = stage_idx + warp_id - NUM_PRODUCER_WARPS;
+        auto real_stage_idx = stage_idx * NUM_CONSUMER_WARPS + consumer_warp_id;
 
         // for (int i = blockIdx.x, stage_idx = 0; i < total_chunks * REPEAT;
         //      i += gridDim.x, stage_idx++) {
