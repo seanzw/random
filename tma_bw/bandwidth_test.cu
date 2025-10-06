@@ -122,6 +122,42 @@ int main() {
   cp_async_bench_4.run_all_stages<8192, repeat, power_of_two_sequence_4>();
   cp_async_bench_4.run_all_stages<16384, repeat, power_of_two_sequence_4>();
 
+  // cp.async benchmarks with 8 producer warps (512 threads: 8 producer + 8
+  // consumer warps)
+  const dim3 cp_async_8_block(512);
+  using power_of_two_sequence_8 = power_of_two_sequence<8, 32>;
+  printf("\n=== cp.async Bandwidth Test (8 Producer Warps) ===\n");
+  CPKernelWrapper<8, 8, CP_METHOD::CP_ASYNC> cp_async_wrapper_8;
+  BandwidthBenchmark cp_async_bench_8(test_data, grid, cp_async_8_block,
+                                      cp_async_wrapper_8,
+                                      "cp.async + 8 producer warps");
+
+  cp_async_bench_8.run_all_stages<256, repeat, power_of_two_sequence_8>();
+  cp_async_bench_8.run_all_stages<512, repeat, power_of_two_sequence_8>();
+  cp_async_bench_8.run_all_stages<1024, repeat, power_of_two_sequence_8>();
+  cp_async_bench_8.run_all_stages<2048, repeat, power_of_two_sequence_8>();
+  cp_async_bench_8.run_all_stages<4096, repeat, power_of_two_sequence_8>();
+  cp_async_bench_8.run_all_stages<8192, repeat, power_of_two_sequence_8>();
+  cp_async_bench_8.run_all_stages<16384, repeat, power_of_two_sequence_8>();
+
+  // cp.async benchmarks with 16 producer warps (1024 threads: 16 producer + 16
+  // consumer warps)
+  const dim3 cp_async_16_block(1024);
+  using power_of_two_sequence_16 = power_of_two_sequence<16, 32>;
+  printf("\n=== cp.async Bandwidth Test (16 Producer Warps) ===\n");
+  CPKernelWrapper<16, 16, CP_METHOD::CP_ASYNC> cp_async_wrapper_16;
+  BandwidthBenchmark cp_async_bench_16(test_data, grid, cp_async_16_block,
+                                       cp_async_wrapper_16,
+                                       "cp.async + 16 producer warps");
+
+  cp_async_bench_16.run_all_stages<256, repeat, power_of_two_sequence_16>();
+  cp_async_bench_16.run_all_stages<512, repeat, power_of_two_sequence_16>();
+  cp_async_bench_16.run_all_stages<1024, repeat, power_of_two_sequence_16>();
+  cp_async_bench_16.run_all_stages<2048, repeat, power_of_two_sequence_16>();
+  cp_async_bench_16.run_all_stages<4096, repeat, power_of_two_sequence_16>();
+  cp_async_bench_16.run_all_stages<8192, repeat, power_of_two_sequence_16>();
+  cp_async_bench_16.run_all_stages<16384, repeat, power_of_two_sequence_16>();
+
   // Normal load benchmarks with 1 producer warp (64 threads: 1 producer + 1
   // consumer warps)
   const dim3 normal_load_1_block(64);

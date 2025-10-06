@@ -39,6 +39,10 @@ def parse_benchmark_file(filename):
             current_benchmark = "cp.async_2_warps"  
         elif "cp.async Bandwidth Test (4 Producer Warps)" in line:
             current_benchmark = "cp.async_4_warps"
+        elif "cp.async Bandwidth Test (8 Producer Warps)" in line:
+            current_benchmark = "cp.async_8_warps"
+        elif "cp.async Bandwidth Test (16 Producer Warps)" in line:
+            current_benchmark = "cp.async_16_warps"
         
         # Initialize benchmark data structure if not exists
         if current_benchmark and current_benchmark not in benchmark_data:
@@ -118,6 +122,8 @@ def main():
         ("cp.async_1_warp", "cp.async (1 Producer)"),
         ("cp.async_2_warps", "cp.async (2 Producers)"),
         ("cp.async_4_warps", "cp.async (4 Producers)"),
+        ("cp.async_8_warps", "cp.async (8 Producers)"),
+        ("cp.async_16_warps", "cp.async (16 Producers)"),
         ("TMA", "TMA")
     ]
     
