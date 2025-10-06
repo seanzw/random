@@ -1,6 +1,9 @@
 #pragma once
 #include "kernels_common.cuh"
 
+// Copy method enumeration
+enum class CP_METHOD { NORMAL_LOAD = 0, CP_ASYNC = 1, TMA = 2 };
+
 // cp.async 16-byte copy (cache-global)
 __device__ inline void cp_async_16(void *smem_dst, const void *global_src) {
   unsigned long long dst_s, src_g;
@@ -61,11 +64,12 @@ __device__ inline void epilogue_wait_and_signal(int stage_idx, int lane_id,
                                    integer_sequence<Is...>{});
 }
 
-template <int CHUNK_BYTES, bool USE_CP_ASYNC = true>
+template <int CHUNK_BYTES, CP_METHOD METHOD = CP_METHOD::CP_ASYNC>
 __device__ inline void cp_chunk(uint8_t *dst_slot, const uint8_t *src_chunk,
-                                int lane_id) {
+                                int lane_id,
+                                unsigned long long *bar_addr = nullptr) {
   // Each thread in the warp copies a portion of the chunk
-  if constexpr (USE_CP_ASYNC) {
+  if constexpr (METHOD == CP_METHOD::CP_ASYNC) {
     // Notice that the minimal transfer size of cp.async.cg is 16 bytes.
     // ! We assume CHUNK_BYTES is divisble by cp_async_cg_bytes
     constexpr int cp_async_cg_bytes = 16;
@@ -77,6 +81,11 @@ __device__ inline void cp_chunk(uint8_t *dst_slot, const uint8_t *src_chunk,
       const uint8_t *src_ptr = src_chunk + b;
       uint8_t *dst_ptr = dst_slot + b;
       cp_async_16(dst_ptr, src_ptr);
+    }
+  } else if constexpr (METHOD == CP_METHOD::TMA) {
+    // TMA copy - only one thread per warp issues the TMA copy
+    if (lane_id == 0) {
+      cp_async_bulk<CHUNK_BYTES>(dst_slot, src_chunk, bar_addr);
     }
   } else {
     // Use normal load instruction with float4 (16 bytes)
@@ -94,7 +103,7 @@ __device__ inline void cp_chunk(uint8_t *dst_slot, const uint8_t *src_chunk,
 
 // ---- cp Kernel with Multiple Producer Warps ----
 template <int Stages, int CHUNK_BYTES, int REPEAT, int NUM_PRODUCER_WARPS = 1,
-          bool USE_CP_ASYNC = true>
+          CP_METHOD METHOD = CP_METHOD::CP_ASYNC>
 __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
                              unsigned long long *__restrict__ sink,
                              size_t total_bytes) {
@@ -109,11 +118,30 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
       mbarrier_init(&bwd_bar[s], 1); // Only consumer signals backward
     }
   }
+
   __syncthreads();
 
-  const size_t total_chunks = total_bytes / CHUNK_BYTES;
   const int warp_id = threadIdx.x / 32;
   const int lane_id = threadIdx.x % 32;
+
+  const size_t total_chunks = total_bytes / CHUNK_BYTES;
+  const size_t producer_warp_chunk_idx_start = blockIdx.x + warp_id * gridDim.x;
+  const size_t producer_warp_chunk_idx_step = NUM_PRODUCER_WARPS * gridDim.x;
+  /**
+   * Calculate how many chunks this warp will process.
+   */
+  const size_t producer_stages =
+      (total_chunks * REPEAT + producer_warp_chunk_idx_step - 1 -
+       producer_warp_chunk_idx_start) /
+      producer_warp_chunk_idx_step;
+
+  const size_t consumer_warp_chunk_idx_start = blockIdx.x;
+  const size_t consumer_warp_chunk_idx_step = gridDim.x;
+  const size_t consumer_stages =
+      (total_chunks * REPEAT + consumer_warp_chunk_idx_step - 1 -
+       consumer_warp_chunk_idx_start) /
+      consumer_warp_chunk_idx_step;
+
   int sum = 0;
 
   static_assert(Stages >= NUM_PRODUCER_WARPS,
@@ -122,50 +150,77 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
   // Multiple Producer warps: each warp handles different chunks
   if (warp_id < NUM_PRODUCER_WARPS) { // Producer warps
 
-    // Each producer warp processes chunks with stride
-    for (size_t chunk_idx = blockIdx.x + warp_id * gridDim.x,
-                stage_idx = warp_id;
-         chunk_idx < total_chunks * REPEAT;
-         chunk_idx += NUM_PRODUCER_WARPS * gridDim.x,
-                stage_idx += NUM_PRODUCER_WARPS) {
-
-      const int slot = int(stage_idx % Stages);
-      uint8_t *dst_slot = smem + slot * CHUNK_BYTES;
-      const uint8_t *src_chunk = src + (chunk_idx % total_chunks) * CHUNK_BYTES;
-
-      // Wait for this slot to be free
-      unsigned want_free = (stage_idx % (Stages * 2)) < Stages;
+    if constexpr (METHOD == CP_METHOD::TMA) {
+      // TMA requires commit before issue
       if (lane_id == 0) {
+
+        // ! Canonical loop variable (starting from 0) improves performance!
+        // ! I don't know why...
+        for (int stage_idx = 0; stage_idx < producer_stages; stage_idx++) {
+          auto real_stage_idx = stage_idx * NUM_PRODUCER_WARPS + warp_id;
+          auto real_chunk_idx = stage_idx * producer_warp_chunk_idx_step +
+                                producer_warp_chunk_idx_start;
+
+          const int slot = real_stage_idx % Stages;
+          uint8_t *dst_slot = smem + slot * CHUNK_BYTES;
+          const uint8_t *src_chunk =
+              src + (real_chunk_idx % total_chunks) * CHUNK_BYTES;
+
+          unsigned want_free = (real_stage_idx % (Stages * 2)) < Stages;
+          wait(&bwd_bar[slot], want_free);
+
+          mbarrier_arrive_expect_tx(&fwd_bar[slot], CHUNK_BYTES);
+          cp_async_bulk<CHUNK_BYTES>(dst_slot, src_chunk, &fwd_bar[slot]);
+        }
+      }
+    } else {
+      // Non-TMA methods
+
+      // Each producer warp processes chunks with stride
+
+      for (int stage_idx = 0; stage_idx < producer_stages; stage_idx++) {
+        auto real_stage_idx = stage_idx * NUM_PRODUCER_WARPS + warp_id;
+        auto real_chunk_idx = stage_idx * producer_warp_chunk_idx_step +
+                              producer_warp_chunk_idx_start;
+
+        const int slot = real_stage_idx % Stages;
+        uint8_t *dst_slot = smem + slot * CHUNK_BYTES;
+        const uint8_t *src_chunk =
+            src + (real_chunk_idx % total_chunks) * CHUNK_BYTES;
+
+        unsigned want_free = (real_stage_idx % (Stages * 2)) < Stages;
         wait(&bwd_bar[slot], want_free);
-      }
-      __syncwarp();
 
-      cp_chunk<CHUNK_BYTES, USE_CP_ASYNC>(dst_slot, src_chunk, lane_id);
-
-      if constexpr (USE_CP_ASYNC) {
-        // Wait for this warp's cp.async operations to complete
-        cp_async_wait_group<0>();
-      }
-      __syncwarp();
-
-      // Each producer warp signals completion
-      if (lane_id == 0) {
-        mbarrier_arrive(&fwd_bar[slot]);
+        cp_chunk<CHUNK_BYTES, METHOD>(dst_slot, src_chunk, lane_id,
+                                      &fwd_bar[slot]);
+        if constexpr (METHOD == CP_METHOD::CP_ASYNC) {
+          // Wait for this warp's cp.async operations to complete
+          cp_async_wait_group<0>();
+        }
+        __syncwarp();
+        if (lane_id == 0) {
+          mbarrier_arrive(&fwd_bar[slot]);
+        }
       }
     }
   }
 
   // Consumer warp: wait for data ready, then consume and free slot
-  else if (warp_id ==
-           NUM_PRODUCER_WARPS) { // Consumer warp (first warp after producers)
-    if (lane_id == 0) {          // Only one thread for simplicity
-      int stage_idx, i;
-      for (i = blockIdx.x, stage_idx = 0; i < total_chunks * REPEAT;
-           i += gridDim.x, stage_idx++) {
-        const int slot = int(stage_idx % Stages);
+  else if (warp_id == NUM_PRODUCER_WARPS) {
+
+    if (lane_id == 0) { // Only one thread for simplicity
+
+      for (int stage_idx = 0; stage_idx < consumer_stages; stage_idx++) {
+        auto real_stage_idx = stage_idx + warp_id - NUM_PRODUCER_WARPS;
+
+        // for (int i = blockIdx.x, stage_idx = 0; i < total_chunks * REPEAT;
+        //      i += gridDim.x, stage_idx++) {
+        //   auto real_stage_idx = stage_idx;
+
+        const int slot = real_stage_idx % Stages;
         uint8_t *dst_slot = smem + slot * CHUNK_BYTES;
 
-        unsigned want_ready = (stage_idx % (Stages * 2)) >= Stages;
+        unsigned want_ready = (real_stage_idx % (Stages * 2)) >= Stages;
         wait(&fwd_bar[slot], want_ready);
 
         auto p32 = reinterpret_cast<const int *>(dst_slot);

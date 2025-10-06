@@ -1,47 +1,46 @@
 // nvcc -std=c++17 -arch=sm_120 -O3 bandwidth_test.cu
 #include "benchmark_framework.cuh"
 #include "cp_kernels.cuh"
-#include "tma_kernels.cuh"
 
-// Kernel wrapper for TMA
+// Kernel wrapper for TMA using the unified cp kernel
 struct TMAKernelWrapper {
   template <int Stages, int CHUNK_BYTES, int REPEAT>
   void set_shmem_size(size_t shmem_bytes) {
-    cudaFuncSetAttribute(tma_bw_kernel<Stages, CHUNK_BYTES, REPEAT>,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize,
-                         shmem_bytes);
+    cudaFuncSetAttribute(
+        cp_bw_kernel<Stages, CHUNK_BYTES, REPEAT, 1, CP_METHOD::TMA>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes);
   }
 
   template <int Stages, int CHUNK_BYTES, int REPEAT>
   void launch(dim3 grid, dim3 block, size_t shmem_bytes, const uint8_t *src,
               unsigned long long *sink, size_t total_bytes) {
-    tma_bw_kernel<Stages, CHUNK_BYTES, REPEAT>
+    cp_bw_kernel<Stages, CHUNK_BYTES, REPEAT, 1, CP_METHOD::TMA>
         <<<grid, block, shmem_bytes>>>(src, sink, total_bytes);
   }
 };
 
 // Kernel wrapper for cp with configurable producer warps
-template <int NUM_PRODUCER_WARPS = 1, bool USE_CP_ASYNC = true>
+template <int NUM_PRODUCER_WARPS = 1, CP_METHOD METHOD = CP_METHOD::CP_ASYNC>
 struct CPKernelWrapper {
   template <int Stages, int CHUNK_BYTES, int REPEAT>
   void set_shmem_size(size_t shmem_bytes) {
-    cudaFuncSetAttribute(cp_bw_kernel<Stages, CHUNK_BYTES, REPEAT,
-                                      NUM_PRODUCER_WARPS, USE_CP_ASYNC>,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize,
-                         shmem_bytes);
+    cudaFuncSetAttribute(
+        cp_bw_kernel<Stages, CHUNK_BYTES, REPEAT, NUM_PRODUCER_WARPS, METHOD>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes);
   }
 
   template <int Stages, int CHUNK_BYTES, int REPEAT>
   void launch(dim3 grid, dim3 block, size_t shmem_bytes, const uint8_t *src,
               unsigned long long *sink, size_t total_bytes) {
-    cp_bw_kernel<Stages, CHUNK_BYTES, REPEAT, NUM_PRODUCER_WARPS, USE_CP_ASYNC>
+    cp_bw_kernel<Stages, CHUNK_BYTES, REPEAT, NUM_PRODUCER_WARPS, METHOD>
         <<<grid, block, shmem_bytes>>>(src, sink, total_bytes);
   }
 };
 
-// Kernel wrapper for normal load (using cp kernel with USE_CP_ASYNC=false)
+// Kernel wrapper for normal load (using cp kernel with NORMAL_LOAD method)
 template <int NUM_PRODUCER_WARPS = 1>
-using NormalLoadKernelWrapper = CPKernelWrapper<NUM_PRODUCER_WARPS, false>;
+using NormalLoadKernelWrapper =
+    CPKernelWrapper<NUM_PRODUCER_WARPS, CP_METHOD::NORMAL_LOAD>;
 
 int main() {
   const size_t total_bytes = size_t(64) * 1024 * 1024; // 64 MiB
@@ -50,12 +49,12 @@ int main() {
   TestData test_data(total_bytes);
   const dim3 grid(test_data.get_num_sms());
 
-  // TMA benchmarks (64 threads: 2 warps)
+  // TMA benchmarks using unified cp_bw_kernel (64 threads: 2 warps)
   const dim3 tma_block(64);
-  printf("\n=== TMA Bandwidth Test ===\n");
+  printf("\n=== TMA Bandwidth Test (via unified cp_bw_kernel) ===\n");
   TMAKernelWrapper tma_wrapper;
   BandwidthBenchmark tma_bench(test_data, grid, tma_block, tma_wrapper,
-                               "Hopper TMA bulk + forward/backward mbarrier");
+                               "TMA via unified cp_bw_kernel");
 
   tma_bench.run_all_stages<256, repeat>();
   tma_bench.run_all_stages<512, repeat>();
@@ -68,7 +67,7 @@ int main() {
   // cp.async benchmarks with 1 producer warp (64 threads: 2 warps)
   const dim3 cp_async_1_block(64);
   printf("\n=== cp.async Bandwidth Test (1 Producer Warp) ===\n");
-  CPKernelWrapper<1, true> cp_async_wrapper_1;
+  CPKernelWrapper<1, CP_METHOD::CP_ASYNC> cp_async_wrapper_1;
   BandwidthBenchmark cp_async_bench_1(test_data, grid, cp_async_1_block,
                                       cp_async_wrapper_1,
                                       "cp.async + 1 producer warp");
@@ -84,7 +83,7 @@ int main() {
   // cp.async benchmarks with 2 producer warps (96 threads: 3 warps)
   const dim3 cp_async_2_block(96);
   printf("\n=== cp.async Bandwidth Test (2 Producer Warps) ===\n");
-  CPKernelWrapper<2, true> cp_async_wrapper_2;
+  CPKernelWrapper<2, CP_METHOD::CP_ASYNC> cp_async_wrapper_2;
   BandwidthBenchmark cp_async_bench_2(test_data, grid, cp_async_2_block,
                                       cp_async_wrapper_2,
                                       "cp.async + 2 producer warps");
@@ -102,7 +101,7 @@ int main() {
   const dim3 cp_async_4_block(160);
   using power_of_two_sequence_4 = power_of_two_sequence<4, 32>;
   printf("\n=== cp.async Bandwidth Test (4 Producer Warps) ===\n");
-  CPKernelWrapper<4, true> cp_async_wrapper_4;
+  CPKernelWrapper<4, CP_METHOD::CP_ASYNC> cp_async_wrapper_4;
   BandwidthBenchmark cp_async_bench_4(test_data, grid, cp_async_4_block,
                                       cp_async_wrapper_4,
                                       "cp.async + 4 producer warps");
@@ -195,7 +194,8 @@ int main() {
   normal_load_bench_16.run_all_stages<2048, repeat, power_of_two_sequence_16>();
   normal_load_bench_16.run_all_stages<4096, repeat, power_of_two_sequence_16>();
   normal_load_bench_16.run_all_stages<8192, repeat, power_of_two_sequence_16>();
-  normal_load_bench_16.run_all_stages<16384, repeat, power_of_two_sequence_16>();
+  normal_load_bench_16
+      .run_all_stages<16384, repeat, power_of_two_sequence_16>();
 
   return 0;
 }

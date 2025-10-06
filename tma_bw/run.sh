@@ -14,7 +14,7 @@ sudo nvidia-smi --lock-gpu-clocks=2000,2000
 
 echo ""
 echo "Running bandwidth comparison test..."
-./bandwidth_test.out > bw_result.log
+./bandwidth_test.out | tee bw_result.log
 
 echo "Resetting GPU clocks to default..."
 sudo nvidia-smi --reset-gpu-clocks

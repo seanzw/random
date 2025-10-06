@@ -49,6 +49,20 @@ constexpr int CONSUMER_WARP = 32; // Warp 1 (threads 32-63)
 // Integer sequence utilities
 template <int... Is> struct integer_sequence {};
 
+// TMA bulk copy - shared between kernels
+template <int bytes>
+__device__ inline void cp_async_bulk(void *smem_dst, const void *global_src,
+                                     unsigned long long *bar_addr) {
+  unsigned long long dst_s, src_g, bar_s;
+  asm volatile("cvta.to.shared.u64 %0, %1;" : "=l"(dst_s) : "l"(smem_dst));
+  asm volatile("cvta.to.global.u64 %0, %1;" : "=l"(src_g) : "l"(global_src));
+  asm volatile("cvta.to.shared.u64 %0, %1;" : "=l"(bar_s) : "l"(bar_addr));
+
+  asm volatile("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes "
+               "[%0], [%1], %3, [%2];" ::"l"(dst_s),
+               "l"(src_g), "l"(bar_s), "n"(bytes));
+}
+
 template <int N, int... Is>
 struct make_integer_sequence : make_integer_sequence<N - 1, N - 1, Is...> {};
 

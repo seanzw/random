@@ -21,7 +21,7 @@ def parse_benchmark_file(filename):
         line = line.strip()
         
         # Check for benchmark type headers
-        if "TMA bulk" in line:
+        if "TMA Bandwidth Test" in line:
             current_benchmark = "TMA"
         elif "Normal Load Bandwidth Test (1 Producer Warp)" in line:
             current_benchmark = "normal_1_warp"
