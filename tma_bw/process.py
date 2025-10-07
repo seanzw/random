@@ -21,7 +21,18 @@ def parse_benchmark_file(filename):
         line = line.strip()
         
         # Check for benchmark type headers
-        if "TMA Bandwidth Test" in line:
+        if "TMA Bandwidth Test (1 Producer Warp)" in line:
+            current_benchmark = "TMA_1_warp"
+        elif "TMA Bandwidth Test (2 Producer Warps)" in line:
+            current_benchmark = "TMA_2_warps"
+        elif "TMA Bandwidth Test (4 Producer Warps)" in line:
+            current_benchmark = "TMA_4_warps"
+        elif "TMA Bandwidth Test (8 Producer Warps)" in line:
+            current_benchmark = "TMA_8_warps"
+        elif "TMA Bandwidth Test (16 Producer Warps)" in line:
+            current_benchmark = "TMA_16_warps"
+        elif "TMA Bandwidth Test" in line:
+            # Fallback for old format without warp specification
             current_benchmark = "TMA"
         elif "Normal Load Bandwidth Test (1 Producer Warp)" in line:
             current_benchmark = "normal_1_warp"
@@ -112,7 +123,7 @@ def main():
     # Convert to TB/s for utilization calculation
     peak_bw_tb = args.peak_bw
 
-    # Define subplot configuration mapping - reordered to Normal loads, cp.async, TMA
+    # Define subplot configuration mapping - reordered to TMA, cp.async, Normal loads
     subplot_config = [
         ("normal_1_warp", "Normal Load (1 Producer)"),
         ("normal_2_warps", "Normal Load (2 Producers)"),
@@ -124,7 +135,11 @@ def main():
         ("cp.async_4_warps", "cp.async (4 Producers)"),
         ("cp.async_8_warps", "cp.async (8 Producers)"),
         ("cp.async_16_warps", "cp.async (16 Producers)"),
-        ("TMA", "TMA")
+        ("TMA_1_warp", "TMA (1 Producer)"),
+        ("TMA_2_warps", "TMA (2 Producers)"),
+        ("TMA_4_warps", "TMA (4 Producers)"),
+        ("TMA_8_warps", "TMA (8 Producers)"),
+        ("TMA_16_warps", "TMA (16 Producers)"),
     ]
     
     # Filter configuration to only include benchmarks that have data
