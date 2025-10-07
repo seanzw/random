@@ -63,11 +63,14 @@ __device__ inline void cp_async_bulk(void *smem_dst, const void *global_src,
                "l"(src_g), "l"(bar_s), "n"(bytes));
 }
 
-template <int N, int... Is>
-struct make_integer_sequence : make_integer_sequence<N - 1, N - 1, Is...> {};
+template <int start, int N, int... Is>
+struct make_integer_sequence
+    : make_integer_sequence<start, N - 1, N - 1, Is...> {
+  static_assert(N > start, "N must be > start");
+};
 
-template <int... Is>
-struct make_integer_sequence<0, Is...> : integer_sequence<Is...> {};
+template <int start, int... Is>
+struct make_integer_sequence<start, start, Is...> : integer_sequence<Is...> {};
 
 // Helper to create power-of-two sequences
 template <int Start, int End, int Current = Start, int... Is>

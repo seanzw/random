@@ -52,6 +52,7 @@ int main() {
 
   TestData test_data(total_bytes);
   const dim3 grid(test_data.get_num_sms());
+  // const dim3 grid(1);
 
   // TMA benchmarks using unified cp_bw_kernel (64 threads: 1 producer + 1
   // consumer warps)
