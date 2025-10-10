@@ -25,9 +25,7 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 
 *Other useful tips*
 
-1. 系统有一套c++运行时环境，而anaconda虚拟环境中也有一套c++运行时环境，命令行中（ldd,g++,nvcc等）默认使用的是系统环境，而python运行时使用的是anaconda环境，如果两者版本不匹配就有可能链接出错。查看版本的方法是：strings $CONDA_PREFIX/lib/libstdc++.so.6 | grep GLIBCXX_。如果anaconda环境的版本过低，应该使用conda install -c conda-forge libstdcxx-ng来升级。
-
-2. 可用以下两种方式之一锁频，但都不是hard constraint，最终SM Frequency会显著小于设定值（目前观测的max gap: 1.79GHz/2.01GHz）
+1. 可用以下两种方式之一锁频，但都不是hard constraint，最终SM Frequency会显著小于设定值（目前观测的max gap: 1.79GHz/2.01GHz）
     1. ncu默认锁定频率到base clock (5090为2.01GHz)，可以不进行任何设置；也可以通过`ncu --clock-control base`显式指定 ([ref](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#clock-control))
     2. 先用`nvidia-smi -i $(GPU_ID) -pm 1`进入persistence mode，再用`nvidia-smi -i $(GPU_ID) -lgc $(GpuClock)`指定频率，同时设定`ncu --clock-control none` ([ref](https://stackoverflow.com/questions/64701751/can-i-fix-my-gpu-clock-rate-to-ensure-consistent-profiling-results))
        - 支持的GpuClock可使用`sudo nvidia-smi -q -d SUPPORTED_CLOCKS`查询，单位：MHz
