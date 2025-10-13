@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <cuda.h>
+#include <cuda/barrier>
 
 struct semaphore {
 private:
@@ -36,6 +37,16 @@ __device__ static inline void arrive(semaphore& sem) {
         "mbarrier.arrive.release.cta.shared::cta.b64 _, [%0];\n"
         :
         : "r"(mbar_ptr)
+        : "memory"
+    );
+}
+
+__device__ static inline void arrive(semaphore& sem, uint32_t count) {
+    uint32_t mbar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&sem));
+    asm volatile (
+        "mbarrier.arrive.release.cta.shared::cta.b64 _, [%0], %1;\n"
+        :
+        : "r"(mbar_ptr), "r"(count)
         : "memory"
     );
 }
@@ -94,40 +105,35 @@ __device__ void Consumer(semaphores_t& sem){
     arrive(sem.A_sem);
 }
 
-__device__ void function(semaphores_t& sem){
-    wait(sem.A_sem, 1);
-    printf("doing\n");
-    arrive(sem.A_sem);
-
-    wait(sem.A_sem, 1);
-    printf("doing\n");
-    arrive(sem.A_sem);
-
-    wait(sem.A_sem, 1);
-    printf("doing\n");
-    arrive(sem.A_sem);
-
-    wait(sem.A_sem, 0);
-    printf("doing\n");
-
-    wait(sem.A_sem, 0);
-    printf("doing\n");
+__device__ void Producer(semaphores_t& sem, int iters){
+    for (int i = 0; i < iters; ++i) {
+        int parity = (i & 1) == 0 ? 1 : 0;
+        wait(sem.A_sem, parity);
+        arrive(sem.B_sem);
+    }
 }
 
-__global__ void Kernel(){
+__device__ void Consumer(semaphores_t& sem, int iters){
+    for (int i = 0; i < iters; ++i) {
+        int parity = (i & 1) == 0 ? 0 : 1;
+        wait(sem.B_sem, parity);
+        arrive(sem.A_sem);
+    }
+}
+
+__global__ void Kernel(int iters){
     __shared__ semaphores_t sem;
     auto tid = threadIdx.x + blockIdx.x * blockDim.x;
     if(tid == 0){
-        init_semaphore(sem.A_sem, 3);
+        init_semaphore(sem.A_sem, 1);
         init_semaphore(sem.B_sem, 1);
     }
     __syncthreads();
     if(tid == 0){
-        function(sem);
-        // Producer(sem);
+        Producer(sem, iters);
     }
     if(tid == 32){
-        // Consumer(sem);
+        Consumer(sem, iters);
     }
     __syncthreads();
     if(tid == 0){
@@ -138,7 +144,19 @@ __global__ void Kernel(){
 
 int main() {
     cudaError_t err;
-    Kernel<<<1, 64>>>();
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    Kernel<<<1, 64>>>(1);
+    cudaDeviceSynchronize();
+
+
+    cudaEventRecord(start);
+    Kernel<<<1, 64>>>(10000000);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "Failed to launch kernel (error code %s)!\n",
@@ -146,5 +164,12 @@ int main() {
         exit(EXIT_FAILURE);
     }
     cudaDeviceSynchronize();
+
+    float ms = 0.0f;
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("MegaKernel version elapsed time: %.3f ms\n", ms);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     return 0;
 }

@@ -4,3 +4,5 @@
     - mbarrier的初始相位为true。
     - 只要phaseParity和当前mbarrier的相位相同，就将waitComplete置为true，而不管pending arrival计数器的值。
     - 每执行一次arrive操作，pending arrival计数器就减一，如果pending arrival计数器归0，就触发相位反转，然后将pending arrival计数器重置为expected arrival。
+
+3. 实现了两个ping-pong buffer的版本，一个用megakernel直接内联汇编的代码实现，一个用CUDA库函数实现
