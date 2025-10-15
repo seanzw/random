@@ -23,6 +23,11 @@ private:
   int num_sms;
 
 public:
+  uint32_t gen_src_value(int i) {
+    return i * 131u + 17u;
+    // return 2;
+  }
+
   TestData(size_t bytes) : total_bytes(bytes) {
     // Query GPU info
     check(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, 0),
@@ -36,8 +41,10 @@ public:
 
     // Initialize data
     std::vector<uint8_t> h_src(total_bytes);
-    for (size_t i = 0; i < total_bytes; ++i)
-      h_src[i] = static_cast<uint8_t>((i * 131u + 17u) & 0xFF);
+    for (int i = 0; i < total_bytes / 4; ++i) {
+      auto p = reinterpret_cast<uint32_t *>(h_src.data() + i * 4);
+      *p = gen_src_value(i);
+    }
     check(cudaMemcpy(d_src, h_src.data(), total_bytes, cudaMemcpyHostToDevice),
           "H2D");
   }
@@ -50,8 +57,10 @@ public:
           "malloc d_sink");
     // Initialize data
     std::vector<uint8_t> h_src(total_bytes);
-    for (size_t i = 0; i < total_bytes; ++i)
-      h_src[i] = static_cast<uint8_t>((i * 131u + 17u) & 0xFF);
+    for (int i = 0; i < total_bytes / 4; ++i) {
+      auto p = reinterpret_cast<uint32_t *>(h_src.data() + i * 4);
+      *p = gen_src_value(i);
+    }
     check(cudaMemcpy(d_src, h_src.data(), total_bytes, cudaMemcpyHostToDevice),
           "H2D");
   }
@@ -80,7 +89,47 @@ public:
                      const char *name)
       : data(data), grid(g), block(b), kernel_func(func), kernel_name(name) {}
 
-  template <int Stages, int CHUNK_BYTES, int REPEAT> 
+  void check_result(int repeat, int chunk_bytes) {
+    // Sum up the first element from each chunk.
+    const size_t total_chunks = data.get_total_bytes() / chunk_bytes;
+    unsigned long long expected_chunk_sum = 0;
+
+    for (size_t chunk_idx = 0; chunk_idx < total_chunks; ++chunk_idx) {
+      size_t byte_offset = chunk_idx * chunk_bytes;
+      // Calculate the first 4 bytes (32-bit int) for this chunk
+      size_t i = byte_offset / 4;
+      uint32_t first_int = data.gen_src_value(i);
+      expected_chunk_sum += first_int;
+    }
+
+    // Multiply this with repeat, this should be the expected sum.
+    unsigned long long expected_total = expected_chunk_sum * repeat;
+
+    // Compare with sink[0] value.
+    std::vector<unsigned long long> h_sink(data.get_num_sms());
+    check(cudaMemcpy(h_sink.data(), data.get_sink(),
+                     sizeof(unsigned long long) * data.get_num_sms(),
+                     cudaMemcpyDeviceToHost),
+          "D2H sink");
+
+    unsigned long long actual_sum = 0;
+    for (int i = 0; i < data.get_num_sms(); ++i) {
+      actual_sum += h_sink[i];
+    }
+
+    // If mismatch, print error and abort.
+    if (actual_sum != expected_total) {
+      printf("ERROR: Result mismatch!\n");
+      printf("  Expected: %llu\n", expected_total);
+      printf("  Actual:   %llu\n", actual_sum);
+      printf("  Repeat:   %d\n", repeat);
+      printf("  Chunk size: %d bytes\n", chunk_bytes);
+      printf("  Total chunks: %zu\n", total_chunks);
+      std::exit(1);
+    }
+  }
+
+  template <int Stages, int CHUNK_BYTES, int REPEAT>
   void run_single_config(int warmup_iters = 1, int num_iters = 10) {
     const size_t shmem_bytes = Stages * CHUNK_BYTES;
 
@@ -136,31 +185,38 @@ public:
     float avg_ms = total_ms / num_iters;
     double seconds = avg_ms / 1e3;
     double gbps = (double)data.get_total_bytes() * REPEAT / seconds / 1e9;
-    printf("Stages=%2d | Chunk=%4d | Warmup=%d | Iters=%d | Time=%.3f ms | BW=%.2f GB/s\n", 
+    check_result(REPEAT, CHUNK_BYTES);
+    printf("Passed | Stages=%2d | Chunk=%4d | Warmup=%d | Iters=%d | Time=%.3f "
+           "ms | BW=%.2f GB/s\n",
            Stages, CHUNK_BYTES, warmup_iters, num_iters, avg_ms, gbps);
   }
 
   // Helper to run single stage from integer sequence
-  template <int CHUNK_BYTES, int Stage, int REPEAT> 
+  template <int CHUNK_BYTES, int Stage, int REPEAT>
   void run_stage(int warmup_iters = 1, int num_iters = 10) {
     run_single_config<Stage, CHUNK_BYTES, REPEAT>(warmup_iters, num_iters);
   }
 
   // Recursive template to run all stages in sequence
   template <int CHUNK_BYTES, int REPEAT>
-  void run_stages_impl(integer_sequence<>, int warmup_iters = 1, int num_iters = 10) {}
+  void run_stages_impl(integer_sequence<>, int warmup_iters = 1,
+                       int num_iters = 10) {}
 
   template <int CHUNK_BYTES, int REPEAT, int Stage, int... Stages>
-  void run_stages_impl(integer_sequence<Stage, Stages...>, int warmup_iters = 1, int num_iters = 10) {
+  void run_stages_impl(integer_sequence<Stage, Stages...>, int warmup_iters = 1,
+                       int num_iters = 10) {
     run_stage<CHUNK_BYTES, Stage, REPEAT>(warmup_iters, num_iters);
-    run_stages_impl<CHUNK_BYTES, REPEAT>(integer_sequence<Stages...>{}, warmup_iters, num_iters);
+    run_stages_impl<CHUNK_BYTES, REPEAT>(integer_sequence<Stages...>{},
+                                         warmup_iters, num_iters);
   }
 
   template <int CHUNK_BYTES, int REPEAT,
             typename StageSequence = power_of_two_sequence<1, 32>>
-  void run_all_stages(StageSequence seq = {}, int warmup_iters = 1, int num_iters = 10) {
-    printf("%s | CHUNK=%d B | total=%zu B | repeat=%d | warmup=%d | iters=%d\n", 
-           kernel_name, CHUNK_BYTES, data.get_total_bytes(), REPEAT, warmup_iters, num_iters);
+  void run_all_stages(StageSequence seq = {}, int warmup_iters = 1,
+                      int num_iters = 10) {
+    printf("%s | CHUNK=%d B | total=%zu B | repeat=%d | warmup=%d | iters=%d\n",
+           kernel_name, CHUNK_BYTES, data.get_total_bytes(), REPEAT,
+           warmup_iters, num_iters);
     run_stages_impl<CHUNK_BYTES, REPEAT>(seq, warmup_iters, num_iters);
   }
 };

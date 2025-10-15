@@ -114,6 +114,7 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
 
   __shared__ unsigned long long fwd_bar[Stages];
   __shared__ unsigned long long bwd_bar[Stages];
+  __shared__ unsigned long long final_sum[NUM_CONSUMER_WARPS];
 
   if (threadIdx.x == 0) {
     for (int s = 0; s < Stages; ++s) {
@@ -148,8 +149,6 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
       consumer_warp_chunk_idx_step;
 
   constexpr int NUM_INITIAL_STAGES = Stages / NUM_PRODUCER_WARPS;
-
-  int sum = 0;
 
   static_assert(Stages >= NUM_PRODUCER_WARPS,
                 "Stages must be at least NUM_PRODUCER_WARPS");
@@ -262,6 +261,8 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
 
     if (lane_id == 0) { // Only one thread for simplicity
 
+      unsigned long long sum = 0;
+
       for (int stage_idx = 0; stage_idx < consumer_stages; stage_idx++) {
         auto real_stage_idx = stage_idx * NUM_CONSUMER_WARPS + consumer_warp_id;
 
@@ -275,7 +276,7 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
         unsigned want_ready = (real_stage_idx % (Stages * 2)) >= Stages;
         wait(&fwd_bar[slot], want_ready);
 
-        auto p32 = reinterpret_cast<const int *>(dst_slot);
+        auto p32 = reinterpret_cast<const uint32_t *>(dst_slot);
         sum += *p32;
 
         mbarrier_arrive(&bwd_bar[slot]);
@@ -285,7 +286,16 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
 
       // printf("Block %d, chunks %d my chunks %d\n", blockIdx.x,
       //        int(total_chunks), int(stage_idx));
-      sink[blockIdx.x] = sum;
+      final_sum[consumer_warp_id] = sum;
     }
+  }
+  __syncthreads();
+  if (lane_id == 0 && warp_id == NUM_PRODUCER_WARPS) {
+    // Only one consumer warp writes back the result
+    unsigned long long ret = 0;
+    for (int i = 0; i < NUM_CONSUMER_WARPS; ++i) {
+      ret += final_sum[i];
+    }
+    sink[blockIdx.x] = ret;
   }
 }
