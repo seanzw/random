@@ -80,7 +80,8 @@ public:
                      const char *name)
       : data(data), grid(g), block(b), kernel_func(func), kernel_name(name) {}
 
-  template <int Stages, int CHUNK_BYTES, int REPEAT> void run_single_config() {
+  template <int Stages, int CHUNK_BYTES, int REPEAT> 
+  void run_single_config(int warmup_iters = 1, int num_iters = 10) {
     const size_t shmem_bytes = Stages * CHUNK_BYTES;
 
     int max_shmem = 0;
@@ -99,14 +100,15 @@ public:
     data.realloc();
 
     // Warm-up
-    kernel_func.template launch<Stages, CHUNK_BYTES, REPEAT>(
-        grid, block, shmem_bytes, data.get_src(), data.get_sink(),
-        data.get_total_bytes());
-    check(cudaGetLastError(), "warm-up launch");
-    check(cudaDeviceSynchronize(), "warm-up sync");
+    for (int warmup = 0; warmup < warmup_iters; ++warmup) {
+      kernel_func.template launch<Stages, CHUNK_BYTES, REPEAT>(
+          grid, block, shmem_bytes, data.get_src(), data.get_sink(),
+          data.get_total_bytes());
+      check(cudaGetLastError(), "warm-up launch");
+      check(cudaDeviceSynchronize(), "warm-up sync");
+    }
 
     // Timed run
-    const int num_iters = 10;
     float total_ms = 0.0f;
     cudaEvent_t start, stop;
 
@@ -134,30 +136,31 @@ public:
     float avg_ms = total_ms / num_iters;
     double seconds = avg_ms / 1e3;
     double gbps = (double)data.get_total_bytes() * REPEAT / seconds / 1e9;
-    printf("Stages=%2d | Chunk=%4d | Time=%.3f ms | BW=%.2f GB/s\n", Stages,
-           CHUNK_BYTES, avg_ms, gbps);
+    printf("Stages=%2d | Chunk=%4d | Warmup=%d | Iters=%d | Time=%.3f ms | BW=%.2f GB/s\n", 
+           Stages, CHUNK_BYTES, warmup_iters, num_iters, avg_ms, gbps);
   }
 
   // Helper to run single stage from integer sequence
-  template <int CHUNK_BYTES, int Stage, int REPEAT> void run_stage() {
-    run_single_config<Stage, CHUNK_BYTES, REPEAT>();
+  template <int CHUNK_BYTES, int Stage, int REPEAT> 
+  void run_stage(int warmup_iters = 1, int num_iters = 10) {
+    run_single_config<Stage, CHUNK_BYTES, REPEAT>(warmup_iters, num_iters);
   }
 
   // Recursive template to run all stages in sequence
   template <int CHUNK_BYTES, int REPEAT>
-  void run_stages_impl(integer_sequence<>) {}
+  void run_stages_impl(integer_sequence<>, int warmup_iters = 1, int num_iters = 10) {}
 
   template <int CHUNK_BYTES, int REPEAT, int Stage, int... Stages>
-  void run_stages_impl(integer_sequence<Stage, Stages...>) {
-    run_stage<CHUNK_BYTES, Stage, REPEAT>();
-    run_stages_impl<CHUNK_BYTES, REPEAT>(integer_sequence<Stages...>{});
+  void run_stages_impl(integer_sequence<Stage, Stages...>, int warmup_iters = 1, int num_iters = 10) {
+    run_stage<CHUNK_BYTES, Stage, REPEAT>(warmup_iters, num_iters);
+    run_stages_impl<CHUNK_BYTES, REPEAT>(integer_sequence<Stages...>{}, warmup_iters, num_iters);
   }
 
   template <int CHUNK_BYTES, int REPEAT,
             typename StageSequence = power_of_two_sequence<1, 32>>
-  void run_all_stages(StageSequence seq = {}) {
-    printf("%s | CHUNK=%d B | total=%zu B | repeat=%d\n", kernel_name,
-           CHUNK_BYTES, data.get_total_bytes(), REPEAT);
-    run_stages_impl<CHUNK_BYTES, REPEAT>(seq);
+  void run_all_stages(StageSequence seq = {}, int warmup_iters = 1, int num_iters = 10) {
+    printf("%s | CHUNK=%d B | total=%zu B | repeat=%d | warmup=%d | iters=%d\n", 
+           kernel_name, CHUNK_BYTES, data.get_total_bytes(), REPEAT, warmup_iters, num_iters);
+    run_stages_impl<CHUNK_BYTES, REPEAT>(seq, warmup_iters, num_iters);
   }
 };

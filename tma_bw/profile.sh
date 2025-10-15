@@ -6,6 +6,7 @@
 # python megakernels/scripts/generate.py mode=torch prompt="write me a 90 word story about Trump" ntok=10 num_warmup=0 num_iters=1
 
 cmd="./bandwidth_test.out"
+cmd="./normal_load_test.out"
 echo $cmd
 workload="bw_test"
 
@@ -21,9 +22,9 @@ ncu -o ${workload} \
   --section MemoryWorkloadAnalysis_Chart \
   --section SpeedOfLight \
   --target-processes all \
-  --cache-control none \
-  --replay-mode application \
 ${cmd}
+  # --cache-control none \
+  # --replay-mode application \
 # --nvtx --nvtx-include "Compute Section/" \
 # --section SpeedOfLight \
   # --set full \
