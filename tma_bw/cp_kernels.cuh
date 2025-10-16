@@ -246,6 +246,7 @@ __global__ void cp_bw_kernel(const uint8_t *__restrict__ src,
                                       &fwd_bar[slot]);
         if constexpr (METHOD == CP_METHOD::CP_ASYNC) {
           // Wait for this warp's cp.async operations to complete
+          cp_async_commit_group();
           cp_async_wait_group<0>();
         }
         __syncwarp();
