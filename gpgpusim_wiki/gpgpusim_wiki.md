@@ -21,6 +21,85 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 
 *E.g. key functions, calling chain for a memory access, how the memory bandwidth is modeled, etc.*
 
+### PTX Opcode Parsing
+
+采用 **X-Macro** 模式，将数据的定义与使用分离。
+
+#### Definition
+
+`opcodes.def` 是所有opcode信息的来源。文件中的每一行都通过macro（`OP_DEF` 或 `OP_W_DEF`）定义了一个opcode的全部meta data。
+
+```c
+// File: cuda-sim/opcodes.def
+// ...
+//        (1)        (2)            (3)           (4)   (5)
+OP_DEF(   ADD_OP,    add_impl,      "add",        1,    1)
+OP_DEF(   BRA_OP,    bra_impl,      "bra",        0,    3)
+OP_W_DEF( BAR_OP,    bar_impl,      "bar.sync",   0,    3) // Warp-level instruction
+// ...
+```
+- (1) 枚举名: ADD_OP - 在代码中使用的唯一标识符。
+- (2) 实现函数: add_impl - 实现了该指令功能的函数指针。
+- (3) 字符串名: "add" - PTX汇编指令名，在解析.ptx文件时进行匹配。
+- (4) 目标操作数标志: 1 表示该指令有目标操作数（destination operand），0 表示没有。
+- (5) 分类ID: 1 (ALU), 3 (Control) - 用于流水线调度、资源分配和性能统计。
+
+#### 宏展开
+
+以add为例：
+* **数据源 (`opcodes.def`)**:
+    ```c
+    OP_DEF(ADD_OP, add_impl, "add", 1, 1)
+    ```
+
+1. 生成枚举 (`cuda-sim/opcodes.h`)
+    * **宏定义**:
+        ```cpp
+        #define OP_DEF(OP,...) OP,
+        ```
+    * **展开效果**:
+        ```cpp
+        enum opcode_t {
+            ...,
+            ADD_OP,
+            ...
+        };
+        ```
+    * **目的**: 获得一个唯一的、类型安全的整数标识符 `ADD_OP`。
+
+2. 生成字符串映射 (`cuda-sim/instructions.cc`)
+    * **宏定义**:
+        ```cpp
+        #define OP_DEF(OP, FUNC, STR, ...) STR,
+        ```
+    * **展开效果**:
+        ```cpp
+        const char *g_opcode_string[] = {
+            ...,
+            "add",
+            ...
+        };
+        ```
+    * **目的**: 创建一个可以通过 `g_opcode_string[ADD_OP]` 快速查找指令名称的数组，用于调试和日志。
+
+3. 生成执行分派表 (`cuda-sim/cuda-sim.cc`)
+    * **宏定义**:
+        ```cpp
+        #define OP_DEF(OP, FUNC, ...) case OP: FUNC(...); break;
+        ```
+    * **展开效果**:
+        ```cpp
+        switch(opcode) {
+            ...
+            case ADD_OP:
+                add_impl(...);
+                break;
+            ...
+        }
+        ```
+    * **目的**: 构建一个高效的 `switch-case` 结构，将指令的执行请求分派到其对应的实现函数 `add_impl`。
+
+
 ## Other Tips
 
 *Other useful tips*
