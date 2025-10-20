@@ -116,12 +116,13 @@ OP_W_DEF( BAR_OP,    bar_impl,      "bar.sync",   0,    3)
   
    
 #### How to Use
-1. Add Trace Points: Include `trace.h` 并调用 `DPRINTF` 宏。第一个参数是 trace_streams.tup 中定义的stream名称，后续参数与`printf`用法一直
+1. Add Trace Points: Include `trace.h` 并调用 `DPRINTF` 宏
 ```cpp
 // Example in a scheduler file
 #include "trace.h"
 
 ...
+// 第一个参数是 trace_streams.tup 中定义的stream名，后续同`printf`用法
 DPRINTF(WARP_SCHEDULER, "Warp %u is now stalled.\n", warp_id);
 ...
 ```
