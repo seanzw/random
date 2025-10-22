@@ -16,7 +16,7 @@
     - [Memory Subsystem](#memory-subsystem)
   - [Other Tips](#other-tips)
     - [5090 Lock Frequency](#5090-lock-frequency)
-    - [NCU Commands](#ncu-commands)
+    - [Profile Flow](#profile-flow)
 
 ## Configuration & Statistics
 
@@ -181,15 +181,15 @@ DPRINTF(WARP_SCHEDULER, "Warp %u is now stalled.\n", warp_id);
     - Observation: GpuClock需略大于期望值，即若期望为2010MHz，则建议使用`nvidia-smi -i $(GPU_ID) -lgc 2011`；若输入`nvidia-smi -i $(GPU_ID) -lgc 2010`，则会在dmon中观测到clock为2002。（此行为未找到官方说明）
     - 鉴于SM Frequency为测量值(cycles/duration)，dmon监测值和ncu report值仍存在明显差距 ([ref](https://forums.developer.nvidia.com/t/sm-frequency-reported-in-nsight-compute/264271))
 
-### NCU Commands
+### Profile Flow
   1. Lock Frequency
   ```shell
   sudo nvidia-smi -i ${GPU_ID} -lgc $((CLOCK+1))
   ```
-  1. Run Profiling
+  2. Run Profiling
   - L2 Cache
     ```shell
-    CUDA_VISIBLE_DEVICES=1 \
+    CUDA_VISIBLE_DEVICES=${GPU_ID} \
     ncu -f -o ${workload} \
     --cache-control none \
     --replay-mode application \
@@ -201,7 +201,7 @@ DPRINTF(WARP_SCHEDULER, "Warp %u is now stalled.\n", warp_id);
     ```
   - DRAM
     ```shell
-    CUDA_VISIBLE_DEVICES=1 \
+    CUDA_VISIBLE_DEVICES=${GPU_ID} \
     ncu -f -o ${workload} \
     --section MemoryWorkloadAnalysis_Chart \
     --section SpeedOfLight \
@@ -209,7 +209,7 @@ DPRINTF(WARP_SCHEDULER, "Warp %u is now stalled.\n", warp_id);
     --clock-control none \
     ${cmd}
     ```
-  1. Reset Frequency
+  3. Reset Frequency
   ```shell
   sudo nvidia-smi -i ${GPU_ID} -rgc
   ```
