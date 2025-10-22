@@ -3,6 +3,7 @@
 - [Notes on GPGPU-Sim](#notes-on-gpgpu-sim)
   - [Configuration \& Statistics](#configuration--statistics)
     - [Updated](#updated)
+    - [Updated, but NOT Necessary](#updated-but-not-necessary)
     - [Unchanged, but Confirmed](#unchanged-but-confirmed)
   - [Code Reading](#code-reading)
     - [PTX Opcode Parsing](#ptx-opcode-parsing)
@@ -15,6 +16,7 @@
     - [Memory Subsystem](#memory-subsystem)
   - [Other Tips](#other-tips)
     - [5090 Lock Frequency](#5090-lock-frequency)
+    - [NCU Commands](#ncu-commands)
 
 ## Configuration & Statistics
 
@@ -27,11 +29,22 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 | 5090 |  GPGPU-sim |  Config Value | Note |
 | -- | -- | -- | -- |
 | # SM | gpgpu_n_clusters | 170 | |
-| num_l2s_per_fbp | gpgpu_n_sub_partition_per_mchannel | 8 | |
-| base clock, memory_clock_rate | gpgpu_clock_domains \<Core Clock\>:\<Interconnect Clock\>:\<L2 Clock\>:\<DRAM Clock\> | 2010:2010:2010:14000 | Core & DRAM clock are confirmed by doc; interconnect & L2 clock just maintained the original convention (same as core clock), not confirmed.  |
+| core clock, memory_clock_rate | gpgpu_clock_domains \<Core Clock\>:\<Interconnect Clock\>:\<L2 Clock\>:\<DRAM Clock\> | 2580:2580:2580:14000 | Core clock is set higher than base to reduce the mismatch caused by SM core, DRAM clock is confirmed by doc; interconnect & L2 clock just maintained the original convention (same as core clock), not confirmed.  |
 | limits_max_cta_per_sm | gpgpu_shader_cta | 24 | |
-| single DRAM bandwidth | gpgpu_dram_buswidth | 4 | \<gpgpu_n_mem_per_ctrlr\>x\<gpgpu_dram_buswidth\>x<# memory controller\> = 512-bit = 64B |
+| num_l2s_per_fbp | gpgpu_n_sub_partition_per_mchannel | 8 | |
+| single DRAM bandwidth | gpgpu_dram_buswidth | 4 | \<gpgpu_n_mem_per_ctrlr\>x\<gpgpu_dram_buswidth\>x<# memory controller\> = 512 bits = 64B |
 | L2 cache | gpgpu_cache:dl2 \<nsets\>:\<bsize\>:\<assoc\>,\<rep\>:\<wr\>:\<alloc\>:\<wr_alloc\>,\<mshr\>:\<N\>:\<merge\>,\<mq\> | S:256:128:24,L:B:m:L:P,A:192:4,32:0,32 | Sectored. Only adjusted to make sure \<nsets\>x\<bsize\>x\<assoc\>x\<# memory controller\>x\<gpgpu_n_sub_partition_per_mchannel\> = 96MB. Specific values are not confirmed.|
+
+
+### Updated, but NOT Necessary
+| 5090 |  GPGPU-sim |  Config Value | Note |
+| -- | -- | -- | -- |
+| Compute Capability | gpgpu_compute_capability_major | 12 | Combined with minor, means the compute capability is 12.0 |
+| Compute Capability | gpgpu_compute_capability_minor | 0 | Combined with major, means the compute capability is 12.0 |
+|  | gpgpu_ptx_force_max_capability | 120 | Use compute capability 12.0 as the upper limit and select the highest version of the binary for execution |
+| | gpgpu_occupancy_sm_number | 120 | Corresponding to sm_120 arch, but this parameter actually has no effect |
+| | gpgpu_coalesce_arch | 120 | Corresponding to sm_120 arch, but this parameter actually has no effect |
+
 
 ### Unchanged, but Confirmed
 
@@ -167,3 +180,36 @@ DPRINTF(WARP_SCHEDULER, "Warp %u is now stalled.\n", warp_id);
     - profile结束后用`sudo nvidia-smi -i $(GPU_ID) -rgc`恢复GPU动态调频
     - Observation: GpuClock需略大于期望值，即若期望为2010MHz，则建议使用`nvidia-smi -i $(GPU_ID) -lgc 2011`；若输入`nvidia-smi -i $(GPU_ID) -lgc 2010`，则会在dmon中观测到clock为2002。（此行为未找到官方说明）
     - 鉴于SM Frequency为测量值(cycles/duration)，dmon监测值和ncu report值仍存在明显差距 ([ref](https://forums.developer.nvidia.com/t/sm-frequency-reported-in-nsight-compute/264271))
+
+### NCU Commands
+  1. Lock Frequency
+  ```shell
+  sudo nvidia-smi -i ${GPU_ID} -lgc $((CLOCK+1))
+  ```
+  1. Run Profiling
+  - L2 Cache
+    ```shell
+    CUDA_VISIBLE_DEVICES=1 \
+    ncu -f -o ${workload} \
+    --cache-control none \
+    --replay-mode application \
+    --section MemoryWorkloadAnalysis_Chart \
+    --section SpeedOfLight \
+    --target-processes all \
+    --clock-control none \
+    ${cmd}
+    ```
+  - DRAM
+    ```shell
+    CUDA_VISIBLE_DEVICES=1 \
+    ncu -f -o ${workload} \
+    --section MemoryWorkloadAnalysis_Chart \
+    --section SpeedOfLight \
+    --target-processes all \
+    --clock-control none \
+    ${cmd}
+    ```
+  1. Reset Frequency
+  ```shell
+  sudo nvidia-smi -i ${GPU_ID} -rgc
+  ```
