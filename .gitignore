@@ -14,5 +14,6 @@
 checkpoint_files/
 _app_cuda_version_*
 _cuobjdump_list_ptx_*
-*.1.sm_86.ptx
-*.1.sm_86.ptxas
+*.ptxas
+*.ptx
+__pycache__
