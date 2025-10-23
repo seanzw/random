@@ -6,8 +6,7 @@
     - [Updated, but NOT Necessary](#updated-but-not-necessary)
     - [Unchanged, but Confirmed](#unchanged-but-confirmed)
   - [Code Reading](#code-reading)
-    - [SM Core](#sm-core)
-      - [Pipeline: Reverse-Order Execution](#pipeline-reverse-order-execution)
+    - [General Design Rule: Reverse-Order Execution](#general-design-rule-reverse-order-execution)
     - [Memory Subsystem](#memory-subsystem)
       - [Calling Chain (wip)](#calling-chain-wip)
     - [PTX Opcode Parsing](#ptx-opcode-parsing)
@@ -62,11 +61,11 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 
 *E.g. key functions, calling chain for a memory access, how the memory bandwidth is modeled, etc.*
 
-### SM Core
+### General Design Rule: Reverse-Order Execution
 
-#### Pipeline: Reverse-Order Execution
-  - `gpgpu-sim/shader.cc`
+  - Take SM core cycle as an example. 
   ```cpp
+  // File: gpgpu-sim/shader.cc
   void shader_core_ctx::cycle() {
     if (!isactive() && get_not_completed() == 0) return;
 
@@ -81,106 +80,65 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
     }
   }
   ```
+  真实硬件中，在时钟周期T，所有pipeline stage（e.g. IF, ID, ISSUE, REG, EX, WB）并行执行，且都依赖 T−1 周期的结果。如果simulator依照 IF → ID → ISSUE → REG → EX → WB 顺序模拟，ID 会在同一个周期 T 错误地用到 IF 刚产生的结果。因此simulator需要逆序执行，确保数据依赖正确。
 
-  真实硬件中，在时钟周期T，所有pipeline stage（e.g. IF, ID, EX, MEM, WB）并行执行，且都依赖 T−1 周期的结果。如果simulator依照 IF → ID → EX → MEM → WB 顺序模拟，EX 会在同一个周期 T 错误地用到 ID 刚产生的结果。因此simulator需要逆序执行，确保数据依赖正确。
-
+  对所有`cycle()`实现，gpgpu-sim的代码都是真实硬件执行的逆序。
 
 ### Memory Subsystem
 
 #### Calling Chain (wip)
 ```mermaid
-graph LR;
+graph TD;
     %% --- 节点定义 (Node Definitions) ---
-    A["(main_loop)"];
-    B["<b>gpgpu_sim::cycle()</b><br>file: gpu-sim.cc<br>purpose: 模拟器的主循环函数。根据不同硬件的时钟频率，驱动相应模块的周期性活动。"];
-    C["<b>simt_core_cluster::core_cycle()</b><br>file: shader.cc<br>purpose: 驱动一个SM Cluster 中所有 Shader Core 的流水线执行。"];
-    D["<b>shader_core_ctx::cycle()</b><br>file: shader.cc<br>purpose: 单个着色器核心的流水线主函数。按顺序调用各个流水线阶段。"];
-    E["<b>shader_core_ctx::execute()</b><br>file: shader.cc<br>purpose: 执行（EX）阶段，处理指令计算，并在需要时调用访存单元。"];
-    F["<b>ldst_unit::cycle()</b><br>file: shader.cc<br>purpose: 驱动加载/存储单元（Load/Store Unit）的运行，处理内存请求。"];
-    G["<b>data_cache::access()</b><br>file: gpu-cache.cc<br>purpose: L1数据缓存的访问入口。负责处理请求，判断命中或缺失。"];
-    H["<b>tag_array::probe()</b><br>file: gpu-cache.cc<br>purpose: 在缓存的Tag Array中进行探测，检查地址状态。"];
-    I["<b>mshr_table::probe() / add()</b><br>file: gpu-cache.cc<br>purpose: 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。"];
-    J["<b>memory_sub_partition::cache_cycle()</b><br>file: l2cache.cc<br>purpose: L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求。"];
-    K["<b>l2_cache::access()</b><br>file: gpu-cache.cc<br>purpose: L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求。"];
-    L["<b>memory_partition_unit::dram_cycle()</b><br>file: dram.cc<br>purpose: 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。"];
+    B["<b>gpgpu_sim::cycle()</b><br> 模拟器的主循环函数。分CORE, L2, ICNT, DRAM四个clock domain，驱动相应模块的周期性活动。"];
+    C["<b>simt_core_cluster::core_cycle()</b><br> 驱动SM Cluster中所有Shader Core的流水线执行。"];
+    D["<b>shader_core_ctx::cycle()</b><br> 单个Shader Core的流水线主函数，逆序调用各流水线阶段(IF-ID-ISSUE-REG-EXE-WB)"];
+    E["<b>shader_core_ctx::execute()</b><br> 执行（EX）阶段，驱动所有FU，处理指令计算，按需调用访存单元。"];
+    F["<b>ldst_unit::cycle()</b><br> 驱动LSU运行，处理内存请求"];
+    G["<b>l1_cache::access()</b><br> L1数据缓存的访问入口。负责处理请求，判断命中或缺失。"];
+    M["<b>baseline_cache::cycle()<br>"];
+    N["<b>ldst_unit::memory_cycle()<br>"];
+    Na["<b>mem_fetch_interface::push()<br>"];
+    Nb["<b>ldst_unit::process_memory_access_queue_l1cache()<br>"]
+    H["<b>tag_array::probe()</b><br> 在缓存的Tag Array中进行探测，检查地址状态。"];
+    I["<b>mshr_table::probe() / add()</b><br> 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。"];
+    J["<b>memory_sub_partition::cache_cycle()</b><br> L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求。"];
+    K["<b>l2_cache::access()</b><br> L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求。"];
+    L["<b>memory_partition_unit::dram_cycle()</b><br> 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。"];
 
     %% --- 边定义 (Edge Definitions / Call Chain) ---
-    A --> B;
-    
+    B --m_cluster[i]->core_cycle();--> C;
+    B --> J;
+    B --> L;
+
     subgraph Core and L1
-        B --> C;
-        C --> D;
-        D --> E;
-        E --> F;
-        F --> G;
+        C --m_core[*it]->cycle();--> D;
+        D --execute();--> E;
+        E --m_fu[n]->cycle();--> F;
+        F --m_L1D->cycle();--> M;
+        M --m_memport->push(mf);--> Na;
+        F --memory_cycle(pipe_reg, rc_fail, type);--> N;
+        N --If bypassL1D == true<br>m_icnt->push(mf);--> Na;
+        N --If bypassL1D == false--> Nb;
+        Nb --cache->access()--> G;
         G --> H;
         G --> I;
     end
 
     subgraph L2 Cache
-        B --> J;
         J --> K;
     end
 
     subgraph DRAM
-        B --> L;
+        L;
     end
 
     %% --- 样式 (Styling) ---
-    style A fill:#f9f9f9,stroke:#333,stroke-width:2px
+    %% style A fill:#f9f9f9,stroke:#333,stroke-width:2px
     style B fill:#f9f9f9,stroke:#333,stroke-width:2px
     style J fill:#f9f9f9,stroke:#333,stroke-width:2px
     style L fill:#f9f9f9,stroke:#333,stroke-width:2px
 ```
-
-<!-- ```cpp
-(main_loop)
-└─ calls: gpgpu_sim::cycle()
-           ├─ file: gpu-sim.cc
-           └─ purpose: 模拟器的主循环函数。根据不同硬件的时钟频率，驱动相应模块的周期性活动。
-           │
-           ├─ calls: simt_core_cluster::core_cycle()
-           │          ├─ file: shader.cc
-           │          └─ purpose: 驱动一个SM簇（Cluster）中所有着色器核心（Shader Core）的流水线执行。
-           │          │
-           │          └─ calls: shader_core_ctx::cycle()
-           │                     ├─ file: shader.cc
-           │                     └─ purpose: 单个着色器核心的流水线主函数。按顺序调用各个流水线阶段。
-           │                     │
-           │                     └─ calls: shader_core_ctx::execute()
-           │                                ├─ file: shader.cc
-           │                                └─ purpose: 执行（EX）阶段，处理指令计算，并在需要时调用访存单元。
-           │                                │
-           │                                └─ calls: ldst_unit::cycle()
-           │                                           ├─ file: shader.cc
-           │                                           └─ purpose: 驱动加载/存储单元（Load/Store Unit）的运行，处理内存请求。
-           │                                           │
-           │                                           └─ calls: data_cache::access()
-           │                                                      ├─ file: gpu-cache.cc
-           │                                                      └─ purpose: L1数据缓存的访问入口。负责处理请求，判断命中或缺失。
-           │                                                      │
-           │                                                      ├─ calls: tag_array::probe()
-           │                                                      │          ├─ file: gpu-cache.cc
-           │                                                      │          └─ purpose: 在缓存的Tag Array中进行探测，检查地址状态。
-           │                                                      │
-           │                                                      └─ calls: mshr_table::probe() / add()
-           │                                                                 ├─ file: gpu-cache.cc
-           │                                                                 └─ purpose: 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。
-           │
-           ├─ calls: memory_sub_partition::cache_cycle()
-           │          ├─ file: l2cache.cc
-           │          └─ purpose: L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求。
-           │          │
-           │          └─ calls: l2_cache::access()
-           │                     ├─ file: gpu-cache.cc
-           │                     └─ purpose: L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求。
-           │
-           └─ calls: memory_partition_unit::dram_cycle()
-                      ├─ file: dram.cc
-                      └─ purpose: 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。
-``` -->
-
-
 
 ### PTX Opcode Parsing
 
