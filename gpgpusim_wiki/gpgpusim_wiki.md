@@ -6,6 +6,10 @@
     - [Updated, but NOT Necessary](#updated-but-not-necessary)
     - [Unchanged, but Confirmed](#unchanged-but-confirmed)
   - [Code Reading](#code-reading)
+    - [SM Core](#sm-core)
+      - [Pipeline: Reverse-Order Execution](#pipeline-reverse-order-execution)
+    - [Memory Subsystem](#memory-subsystem)
+      - [Calling Chain (wip)](#calling-chain-wip)
     - [PTX Opcode Parsing](#ptx-opcode-parsing)
       - [Calling Chain: From .ptx to function\_info](#calling-chain-from-ptx-to-function_info)
       - [Centralized Definition](#centralized-definition)
@@ -13,7 +17,6 @@
     - [Debug: Trace](#debug-trace)
       - [Implementation](#implementation)
       - [Usage](#usage)
-    - [Memory Subsystem](#memory-subsystem)
   - [Other Tips](#other-tips)
     - [5090 Lock Frequency](#5090-lock-frequency)
     - [Profile Flow](#profile-flow)
@@ -58,6 +61,84 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 ## Code Reading
 
 *E.g. key functions, calling chain for a memory access, how the memory bandwidth is modeled, etc.*
+
+### SM Core
+
+#### Pipeline: Reverse-Order Execution
+  - `gpgpu-sim/shader.cc`
+  ```cpp
+  void shader_core_ctx::cycle() {
+    if (!isactive() && get_not_completed() == 0) return;
+
+    m_stats->shader_cycles[m_sid]++;
+    writeback();
+    execute();
+    read_operands();
+    issue();
+    for (unsigned int i = 0; i < m_config->inst_fetch_throughput; ++i) {
+      decode();
+      fetch();
+    }
+  }
+  ```
+
+  真实硬件中，在时钟周期T，所有pipeline stage（e.g. IF, ID, EX, MEM, WB）并行执行，且都依赖 T−1 周期的结果。如果simulator依照 IF → ID → EX → MEM → WB 顺序模拟，EX 会在同一个周期 T 错误地用到 ID 刚产生的结果。因此simulator需要逆序执行，确保数据依赖正确。
+
+<!-- | Execution Order | Stage Function  | Data Source (State from Cycle $T-1$) | Data Destination (State for Cycle $T+1$) |
+| :--- | :--- | :--- | :--- |
+| 1. | `writeback()` | Data from `(EX/MEM)/WB` Register | (Writes to Register File) |
+| 2. | `execute()` | Data from `OP/EX` Register | Writes to `(EX/MEM)/WB` Register |
+| 3. | `read_operands()` | Data from `IS/OP` Register | Writes to `OP/EX` Register |
+| 4. | `issue()` | Data from `DE/IS` Register (Scheduler) | Writes to `IS/OP` Register |
+| 5. | `decode()` | Data from `IF/DE` Register (Fetch Buffer) | Writes to `DE/IS` Register |
+| 6. | `fetch()` | (Instruction Cache) | Writes to `IF/DE` Register (Fetch Buffer) | -->
+
+### Memory Subsystem
+
+#### Calling Chain (wip)
+```
+(main_loop)
+└─ calls: gpgpu_sim::cycle()
+           ├─ file: gpu-sim.cc
+           └─ purpose: 模拟器的主循环函数。根据不同硬件的时钟频率，驱动相应模块的周期性活动。
+           │
+           ├─ calls: simt_core_cluster::core_cycle()
+           │          ├─ file: shader.cc
+           │          └─ purpose: 驱动一个SM簇（Cluster）中所有着色器核心（Shader Core）的流水线执行。
+           │          │
+           │          └─ calls: shader_core_ctx::cycle()
+           │                     ├─ file: shader.cc
+           │                     └─ purpose: 单个着色器核心的流水线主函数。按顺序调用各个流水线阶段。
+           │                     │
+           │                     └─ calls: ldst_unit::cycle()
+           │                                ├─ file: shader.cc
+           │                                └─ purpose: 驱动加载/存储单元（Load/Store Unit）的运行，处理内存请求。
+           │                                │
+           │                                └─ calls: data_cache::access()
+           │                                           ├─ file: gpu-cache.cc
+           │                                           └─ purpose: L1数据缓存的访问入口。负责处理请求，判断命中或缺失。
+           │                                           │
+           │                                           ├─ calls: tag_array::probe()
+           │                                           │          ├─ file: gpu-cache.cc
+           │                                           │          └─ purpose: 在缓存的Tag Array中进行探测，检查地址状态。
+           │                                           │
+           │                                           └─ calls: mshr_table::probe() / add()
+           │                                                      ├─ file: gpu-cache.cc
+           │                                                      └─ purpose: 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。
+           │
+           ├─ calls: memory_sub_partition::cache_cycle()
+           │          ├─ file: l2cache.cc
+           │          └─ purpose: L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求。
+           │          │
+           │          └─ calls: l2_cache::access()
+           │                     ├─ file: gpu-cache.cc
+           │                     └─ purpose: L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求。
+           │
+           └─ calls: memory_partition_unit::dram_cycle()
+                      ├─ file: dram.cc
+                      └─ purpose: 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。
+```
+
 
 ### PTX Opcode Parsing
 
@@ -161,10 +242,6 @@ DPRINTF(WARP_SCHEDULER, "Warp %u is now stalled.\n", warp_id);
 ```
 
 3. Compile and Run: Set `TRACING_ON=1` during compilation.
-
-
-### Memory Subsystem
-
 
 
 ## Other Tips
