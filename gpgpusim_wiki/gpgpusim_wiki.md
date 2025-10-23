@@ -84,19 +84,56 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 
   真实硬件中，在时钟周期T，所有pipeline stage（e.g. IF, ID, EX, MEM, WB）并行执行，且都依赖 T−1 周期的结果。如果simulator依照 IF → ID → EX → MEM → WB 顺序模拟，EX 会在同一个周期 T 错误地用到 ID 刚产生的结果。因此simulator需要逆序执行，确保数据依赖正确。
 
-<!-- | Execution Order | Stage Function  | Data Source (State from Cycle $T-1$) | Data Destination (State for Cycle $T+1$) |
-| :--- | :--- | :--- | :--- |
-| 1. | `writeback()` | Data from `(EX/MEM)/WB` Register | (Writes to Register File) |
-| 2. | `execute()` | Data from `OP/EX` Register | Writes to `(EX/MEM)/WB` Register |
-| 3. | `read_operands()` | Data from `IS/OP` Register | Writes to `OP/EX` Register |
-| 4. | `issue()` | Data from `DE/IS` Register (Scheduler) | Writes to `IS/OP` Register |
-| 5. | `decode()` | Data from `IF/DE` Register (Fetch Buffer) | Writes to `DE/IS` Register |
-| 6. | `fetch()` | (Instruction Cache) | Writes to `IF/DE` Register (Fetch Buffer) | -->
 
 ### Memory Subsystem
 
 #### Calling Chain (wip)
+```mermaid
+graph LR;
+    %% --- 节点定义 (Node Definitions) ---
+    A["(main_loop)"];
+    B["<b>gpgpu_sim::cycle()</b><br>file: gpu-sim.cc<br>purpose: 模拟器的主循环函数。根据不同硬件的时钟频率，驱动相应模块的周期性活动。"];
+    C["<b>simt_core_cluster::core_cycle()</b><br>file: shader.cc<br>purpose: 驱动一个SM Cluster 中所有 Shader Core 的流水线执行。"];
+    D["<b>shader_core_ctx::cycle()</b><br>file: shader.cc<br>purpose: 单个着色器核心的流水线主函数。按顺序调用各个流水线阶段。"];
+    E["<b>shader_core_ctx::execute()</b><br>file: shader.cc<br>purpose: 执行（EX）阶段，处理指令计算，并在需要时调用访存单元。"];
+    F["<b>ldst_unit::cycle()</b><br>file: shader.cc<br>purpose: 驱动加载/存储单元（Load/Store Unit）的运行，处理内存请求。"];
+    G["<b>data_cache::access()</b><br>file: gpu-cache.cc<br>purpose: L1数据缓存的访问入口。负责处理请求，判断命中或缺失。"];
+    H["<b>tag_array::probe()</b><br>file: gpu-cache.cc<br>purpose: 在缓存的Tag Array中进行探测，检查地址状态。"];
+    I["<b>mshr_table::probe() / add()</b><br>file: gpu-cache.cc<br>purpose: 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。"];
+    J["<b>memory_sub_partition::cache_cycle()</b><br>file: l2cache.cc<br>purpose: L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求。"];
+    K["<b>l2_cache::access()</b><br>file: gpu-cache.cc<br>purpose: L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求。"];
+    L["<b>memory_partition_unit::dram_cycle()</b><br>file: dram.cc<br>purpose: 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。"];
+
+    %% --- 边定义 (Edge Definitions / Call Chain) ---
+    A --> B;
+    
+    subgraph Core and L1
+        B --> C;
+        C --> D;
+        D --> E;
+        E --> F;
+        F --> G;
+        G --> H;
+        G --> I;
+    end
+
+    subgraph L2 Cache
+        B --> J;
+        J --> K;
+    end
+
+    subgraph DRAM
+        B --> L;
+    end
+
+    %% --- 样式 (Styling) ---
+    style A fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style B fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style J fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style L fill:#f9f9f9,stroke:#333,stroke-width:2px
 ```
+
+<!-- ```cpp
 (main_loop)
 └─ calls: gpgpu_sim::cycle()
            ├─ file: gpu-sim.cc
@@ -110,21 +147,25 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
            │                     ├─ file: shader.cc
            │                     └─ purpose: 单个着色器核心的流水线主函数。按顺序调用各个流水线阶段。
            │                     │
-           │                     └─ calls: ldst_unit::cycle()
+           │                     └─ calls: shader_core_ctx::execute()
            │                                ├─ file: shader.cc
-           │                                └─ purpose: 驱动加载/存储单元（Load/Store Unit）的运行，处理内存请求。
+           │                                └─ purpose: 执行（EX）阶段，处理指令计算，并在需要时调用访存单元。
            │                                │
-           │                                └─ calls: data_cache::access()
-           │                                           ├─ file: gpu-cache.cc
-           │                                           └─ purpose: L1数据缓存的访问入口。负责处理请求，判断命中或缺失。
+           │                                └─ calls: ldst_unit::cycle()
+           │                                           ├─ file: shader.cc
+           │                                           └─ purpose: 驱动加载/存储单元（Load/Store Unit）的运行，处理内存请求。
            │                                           │
-           │                                           ├─ calls: tag_array::probe()
-           │                                           │          ├─ file: gpu-cache.cc
-           │                                           │          └─ purpose: 在缓存的Tag Array中进行探测，检查地址状态。
-           │                                           │
-           │                                           └─ calls: mshr_table::probe() / add()
+           │                                           └─ calls: data_cache::access()
            │                                                      ├─ file: gpu-cache.cc
-           │                                                      └─ purpose: 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。
+           │                                                      └─ purpose: L1数据缓存的访问入口。负责处理请求，判断命中或缺失。
+           │                                                      │
+           │                                                      ├─ calls: tag_array::probe()
+           │                                                      │          ├─ file: gpu-cache.cc
+           │                                                      │          └─ purpose: 在缓存的Tag Array中进行探测，检查地址状态。
+           │                                                      │
+           │                                                      └─ calls: mshr_table::probe() / add()
+           │                                                                 ├─ file: gpu-cache.cc
+           │                                                                 └─ purpose: 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。
            │
            ├─ calls: memory_sub_partition::cache_cycle()
            │          ├─ file: l2cache.cc
@@ -137,7 +178,8 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
            └─ calls: memory_partition_unit::dram_cycle()
                       ├─ file: dram.cc
                       └─ purpose: 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。
-```
+``` -->
+
 
 
 ### PTX Opcode Parsing
