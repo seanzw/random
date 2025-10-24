@@ -184,7 +184,62 @@ graph TD;
 ```
 
 ##### L2 Cache (wip)
+```mermaid
+graph TD;
+    %% --- 节点定义 (Node Definitions) ---
+    A["<b>gpgpu_sim::cycle()</b><br>模拟器主循环。根据时钟域(L2)驱动内存子分区"];
+    B["<b>memory_sub_partition::cache_cycle()</b><br>L2所在内存子分区的核心驱动函数。处理所有队列的请求移动和L2交互"];
+    C["<b>l2_cache::access()</b><br>L2 Cache的访问入口。探测tag状态，处理命中/缺失，与MSHR交互"];
+    D["<b>tag_array::probe()</b><br>探测tag array，判断是HIT, MISS, SECTOR_MISS还是RESERVATION_FAIL"];
+    E["<b>mshr_table::probe() / add()</b><br>在L2 MISS时，检查或创建MSHR条目以跟踪在途请求，实现请求合并"];
+    F["<b>l2_cache::cycle()</b><br>L2 Cache内部循环。将MSHR中准备好发往DRAM的请求推入m_miss_queue"];
+    G["<b>mem_fetch_interface::push()</b><br>在此为L2interface子类。将请求(mf)放入m_L2_dram_queue，准备发往DRAM"];
+    H["<b>l2_cache::fill()</b><br>当数据从DRAM返回时调用。将数据写入缓存行，并标记MSHR条目为就绪(ready)"];
+    I["<b>l2_cache::next_access()</b><br>从就绪的MSHR条目中弹出已完成的请求(mf)，准备返回给核心"];
+
+    %% --- 边定义 (Edge Definitions / Call Chain) ---
+    subgraph "Request Path (Core -> L2 -> DRAM)"
+        A -- "if (clock_mask & L2)<br>m_memory_sub_partition[i]->cache_cycle()" --> B;
+        B -- "m_L2cache->access(mf->get_addr(), mf, ...)" --> C;
+        C -- "m_tag_array->probe(...)" --> D;
+        C -- "On MISS<br>m_mshrs.probe() / .add()" --> E;
+        B -- "m_L2cache->cycle()" --> F;
+        F -- "m_memport->push(mf)" --> G;
+    end
+
+    subgraph "Response Path (DRAM -> L2 -> Core)"
+        B -- "if (m_L2cache->waiting_for_fill(mf))<br>m_L2cache->fill(mf, ...)" --> H;
+        B -- "if (m_L2cache->access_ready())<br>mem_fetch *mf = m_L2cache->next_access()" --> I;
+    end
+```
+
 ##### DRAM (wip)
+```mermaid
+graph LR;
+    %% --- 节点定义 (Node Definitions) ---
+    A["<b>gpgpu_sim::cycle()</b><br>模拟器主循环。根据时钟域(DRAM)驱动内存分区"];
+    B["<b>memory_partition_unit::dram_cycle()</b><br>内存分区的DRAM驱动函数。处理DRAM返回，仲裁并向DRAM发送新请求"];
+    C["<b>dram_t::cycle()</b><br>DRAM控制器主循环。处理命令队列，模拟DRAM时序，移动数据"];
+    D["<b>dram_t::push(mf)</b><br>接收来自内存分区的请求(mf)，将其放入命令队列(m_frfcfs_queue)"];
+    E["<b>dram_t::return_queue_top() / pop()</b><br>从DRAM的返回队列(m_return_queue)中取出已完成的请求"];
+    F["<b>memory_sub_partition::dram_L2_queue_push(mf)</b><br>将从DRAM返回的请求放入子分区的dram_L2_queue中"];
+    G["<b>memory_partition_unit::can_issue_to_dram(spid)</b><br>仲裁逻辑：检查子分区是否有信用(credit)向DRAM发送请求"];
+    H["<b>memory_sub_partition::L2_dram_queue_top() / pop()</b><br>从L2到DRAM的发送队列中取出请求"];
+
+    %% --- 边定义 (Edge Definitions / Call Chain) ---
+    subgraph "Request Path (L2 -> DRAM)"
+        A -- "if (clock_mask & DRAM)<br>m_memory_partition_unit[i]->dram_cycle()" --> B;
+        B -- "can_issue_to_dram(spid)" --> G;
+        B -- "m_sub_partition[spid]->L2_dram_queue_top()" --> H;
+        B -- "m_dram->push(mf)" --> D;
+        B -- "m_dram->cycle()" --> C;
+    end
+
+    subgraph "Response Path (DRAM -> L2)"
+        B -- "mem_fetch *mf_return = m_dram->return_queue_top()" --> E;
+        B -- "m_sub_partition[dest_spid]->dram_L2_queue_push(mf_return)" --> F;
+    end
+```
 
 
 ### PTX Opcode Parsing
