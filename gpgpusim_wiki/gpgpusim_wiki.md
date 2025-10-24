@@ -87,58 +87,105 @@ Reference: [GPGPU-sim Doc](http://gpgpu-sim.org/manual/index.php/Main_Page#Confi
 ### Memory Subsystem
 
 #### Calling Chain (wip)
+
 ```mermaid
 graph TD;
     %% --- 节点定义 (Node Definitions) ---
-    B["<b>gpgpu_sim::cycle()</b><br> 模拟器的主循环函数。分CORE, L2, ICNT, DRAM四个clock domain，驱动相应模块的周期性活动。"];
-    C["<b>simt_core_cluster::core_cycle()</b><br> 驱动SM Cluster中所有Shader Core的流水线执行。"];
-    D["<b>shader_core_ctx::cycle()</b><br> 单个Shader Core的流水线主函数，逆序调用各流水线阶段(IF-ID-ISSUE-REG-EXE-WB)"];
-    E["<b>shader_core_ctx::execute()</b><br> 执行（EX）阶段，驱动所有FU，处理指令计算，按需调用访存单元。"];
-    F["<b>ldst_unit::cycle()</b><br> 驱动LSU运行，处理内存请求"];
-    G["<b>l1_cache::access()</b><br> L1数据缓存的访问入口。负责处理请求，判断命中或缺失。"];
-    M["<b>baseline_cache::cycle()<br>"];
-    N["<b>ldst_unit::memory_cycle()<br>"];
-    Na["<b>mem_fetch_interface::push()<br>"];
-    Nb["<b>ldst_unit::process_memory_access_queue_l1cache()<br>"]
-    H["<b>tag_array::probe()</b><br> 在缓存的Tag Array中进行探测，检查地址状态。"];
-    I["<b>mshr_table::probe() / add()</b><br> 在缓存缺失时，查询或添加条目到MSHR，用于跟踪在途内存请求。"];
-    J["<b>memory_sub_partition::cache_cycle()</b><br> L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求。"];
-    K["<b>l2_cache::access()</b><br> L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求。"];
-    L["<b>memory_partition_unit::dram_cycle()</b><br> 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令。"];
+    A["<b>gpgpu_sim::cycle()</b><br> 模拟器的主循环函数。分CORE, L2, ICNT, DRAM四个clock domain，驱动相应模块的周期性活动"];
+
+    B["Cluster -> Shader Core -> EX -> LSU"];
+    Ba["进入memory cycle，设定新访问请求的delay cycle并将其推入latency queue"];
+    Bb["每周期推进delay cycle，在delay归0时，探测L1 cache是否命中，将miss的访问请求推入miss queue"]
+    Bc["从miss queue中取出请求，注入Interconnect"]
+
+    C["<b>memory_sub_partition::cache_cycle()</b><br> L2缓存所在内存子分区的核心驱动函数。处理进出L2的请求"];
+    D["<b>l2_cache::access()</b><br> L2缓存的访问入口。处理来自互联网络（ICNT）的内存请求"];
+    E["<b>memory_partition_unit::dram_cycle()</b><br> 驱动DRAM控制器和调度器的运行，向DRAM模型发送命令"];
 
     %% --- 边定义 (Edge Definitions / Call Chain) ---
-    B --m_cluster[i]->core_cycle();--> C;
-    B --> J;
-    B --> L;
+    A --m_cluster[i]->core_cycle();--> B;
+    A --> C;
+    A --> E;
 
-    subgraph Core and L1
+    subgraph SM Core and L1 Cache
+        B --> Ba;
+        B --> Bb;
+        B --> Bc;
+        Ba --> Bb --> Bc;
+    end
+
+    subgraph L2 Cache
+        C --> D;
+    end
+
+    subgraph DRAM
+        E;
+    end
+
+```
+
+##### SM Core and L1 Cache
+```mermaid
+graph TD;
+    %% --- 节点定义 (Node Definitions) ---
+    C["<b>simt_core_cluster::core_cycle()</b><br> 驱动SM Cluster中所有Shader Core的流水线执行"];
+    D["<b>shader_core_ctx::cycle()</b><br> 单个Shader Core的流水线主函数，逆序调用各流水线阶段(IF-ID-ISSUE-REG-EXE-WB)"];
+    E["<b>shader_core_ctx::execute()</b><br> 执行(EX)阶段，驱动所有FU，处理指令计算，调用LSU"];
+
+    F["<b>ldst_unit::cycle()</b><br> LSU顶层cycle。处理所有底层函数返回的STALL"];
+    Fa["<b>ldst_unit::L1_latency_queue_cycle()</b><br> 模拟有delay的l1 cache，检测每个bank的pipeline出口是否有请求，访问L1 Cache"];
+    N["<b>ldst_unit::memory_cycle()</b><br> 驱动除了constant, shared, texture之外的memory访问，发送请求或者记录停顿"];
+
+    G["<b>l1_cache::access()</b><br> L1 Cache的访问入口。探测tag状态，分发请求给处理函数，更新统计信息，返回access_status给LSU(用于判断是否要stall)"];
+    Ga["<b>tag_array::probe()</b><br> 探测tag array，判断是否HIT，若MISS则判断evict cacheline index"];
+
+    M["<b>baseline_cache::cycle()</b><br> 从m_miss_queue中取出请求发送到下一级内存，更新端口占用状况"];
+    Na["<b>mem_fetch_interface::push()</b><br> 在此采用shader_memory_interface子类，统计网络流量，将mf(请求)注入互联网络(Interconnect)" ];
+    Za["<b>simt_core_cluster::icnt_inject_request_packet()</b><br> 更新统计信息，确认destination，调用外部interconnect模型接口"]
+    Z["<b>::icnt_push()</b><br> GPGPU-Sim核心与具体互联网络模型 (e.g. BookSim) 之间的接口"]
+
+    Nb["<b>ldst_unit::process_memory_access_queue_l1cache()</b><br> 若模拟l1 delay，则确定目标bank，将mf放入l1_latency_queue由后续LSU cycle调用的L1_latency_queue_cycle()处理，若有conflict则返回上游函数使其stall；若使用理想l1(无delay)，则直接进行cache access"]
+    H["<b>data_cache::process_tag_probe()</b><br> 接收tag探测结果，如果是不是HIT或RESERVATION_FAIL，就处理MISS"];
+    I["<b>m_wr_miss</b><br> MISS处理指针，根据配置的m_write_alloc_policy跳转"];
+
+    Ia["<b>data_cache::<br>wr_miss_wa_naive()</b>"];
+    Ib["<b>data_cache::<br>wr_miss_wa_lazy_fetch_on_read()</b><br>"];
+    Ic["<b>data_cache::<br>wr_miss_wa_fetch_on_write()</b><br>"];
+    Id["<b>data_cache::<br>wr_miss_no_wa()</b><br>"];
+
+    O["<b>data_cache::send_write_request()</b><br>" 将mem_fetch对象推入m_miss_queue，后续在LSU cycle中调用的m_L1D->cycle会把mf对象取出并发往下一级内存]
+
+    %% --- 边定义 (Edge Definitions / Call Chain) ---
+
         C --m_core[*it]->cycle();--> D;
         D --execute();--> E;
         E --m_fu[n]->cycle();--> F;
         F --m_L1D->cycle();--> M;
         M --m_memport->push(mf);--> Na;
         F --memory_cycle(pipe_reg, rc_fail, type);--> N;
+        F --L1_latency_queue_cycle();--> Fa;
+        Fa --m_L1D->access(mf_next->get_addr(), mf_next, m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle, events);--> G;
         N --If bypassL1D == true<br>m_icnt->push(mf);--> Na;
+        Na --m_cluster->icnt_inject_request_packet(mf);--> Za;
+        Za --::icnt_push(m_cluster_id, m_config->mem2device...);--> Z;
         N --If bypassL1D == false--> Nb;
         Nb --cache->access()--> G;
-        G --> H;
-        G --> I;
-    end
-
-    subgraph L2 Cache
-        J --> K;
-    end
-
-    subgraph DRAM
-        L;
-    end
-
-    %% --- 样式 (Styling) ---
-    %% style A fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style B fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style J fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style L fill:#f9f9f9,stroke:#333,stroke-width:2px
+        G --m_tag_array->probe(block_addr, cache_index, mf, mf->is_write(), true);--> Ga;
+        G --process_tag_probe(wr, probe_status, addr, cache_index, mf, time, events);--> H;
+        H --(this->*m_wr_miss)(addr, cache_index, mf, time, events, probe_status);--> I;
+        I --WRITE_ALLOCATE--> Ia;
+        I --LAZY_FETCH_ON_READ--> Ib;
+        I --FETCH_ON_WRITE--> Ic;
+        I --NO_WRITE_ALLOCATE--> Id;
+        Ia --> O;
+        Ib --> O;
+        Ic --> O;
+        Id --> O;
 ```
+
+##### L2 Cache (wip)
+##### DRAM (wip)
+
 
 ### PTX Opcode Parsing
 
