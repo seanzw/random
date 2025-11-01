@@ -2,14 +2,14 @@
 
 ### tma_bw
 
-Simple script to test TMA's capability to saturate the *L2* bandwidth.
+Simple script to test the capability of TMA and `cp.async` to saturate the *L2* bandwidth.
 
 ```bash
 bash run.sh
 ```
 
 Also plot the heatmap like this one on RTX 5090:
-![TMA_5090_Heatmap](./tma_bw/tma_bw_result.png "5090 TMA Saturating L2 Bandwidth")
+![TMA_5090_Heatmap](./tma_bw/bw_result.png "5090 TMA Saturating L2 Bandwidth")
 
 ### local_mem_write_policy
 

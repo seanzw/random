@@ -1,4 +1,19 @@
+# local env
+.venv
+
+# profiling
 *.out
 *.log
 *.ncu-rep
-.venv
+
+# gpgpu-sim config
+*.icnt
+*.config
+
+# gpgpu-sim artifacts
+checkpoint_files/
+_app_cuda_version_*
+_cuobjdump_list_ptx_*
+*.ptxas
+*.ptx
+__pycache__

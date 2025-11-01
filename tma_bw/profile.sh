@@ -5,9 +5,10 @@
 # --output nsys_torch \
 # python megakernels/scripts/generate.py mode=torch prompt="write me a 90 word story about Trump" ntok=10 num_warmup=0 num_iters=1
 
-cmd="./tma_bw.out"
+cmd="./bandwidth_test.out"
+cmd="./normal_load_test.out"
 echo $cmd
-workload="tma_bw"
+workload="bw_test"
 
 # rm ${workload}.nsys-rep ${workload}.sqlite
 # nsys profile -t nvtx,cuda --stats true \
@@ -18,11 +19,16 @@ workload="tma_bw"
 
 rm ${workload}.ncu-rep
 ncu -o ${workload} \
-  --set full \
+  --section MemoryWorkloadAnalysis_Chart \
+  --section SpeedOfLight \
   --target-processes all \
 ${cmd}
+  # --cache-control none \
+  # --replay-mode application \
 # --nvtx --nvtx-include "Compute Section/" \
 # --section SpeedOfLight \
+  # --set full \
+# --section MemoryWorkloadAnalysis_Chart \
 
 # rm ncu_torch.ncu-rep
 # ncu -o ncu_torch \
