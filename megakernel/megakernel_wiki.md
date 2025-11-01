@@ -6,3 +6,5 @@
     - 每执行一次arrive操作，pending arrival计数器就减一，如果pending arrival计数器归0，就触发相位反转，然后将pending arrival计数器重置为expected arrival。
 
 3. 实现了两个ping-pong buffer的版本，一个用megakernel直接内联汇编的代码实现，一个用CUDA库函数实现
+
+4. 在vscode中可以对python端调用的CUDA算子做联合调试，可以将launch.json设置为附件中所示。启动“Python Debugger”可以对Python代码部分做调试，启动“CUDA Debugger”可以对CUDA代码部分做调试。启动“Joint Debugging”可以同时在Python代码和CUDA代码中打断点调试。其中，Python Debugger的program参数需要设置为python脚本的路径，python参数需要设置为python的路径，如果使用conda虚拟环境需要手动指定其路径；CUDA Debugger中program需要设置为python的路径，args参数需要设置为python脚本的路径。

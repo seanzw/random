@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "Python Debugger",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/megakernels/scripts/gcn.py",
+            "python": "/home/gufeng/anaconda3/envs/megakernel/bin/python",
+            // "console": "integratedTerminal"
+        },
+        {
+            "name": "CUDA Debugger",
+            "type": "cuda-gdb",
+            "request": "launch",
+            "program": "~/anaconda3/envs/megakernel/bin/python",
+            "args": ["${workspaceFolder}/megakernels/scripts/gcn.py"],
+            "debuggerPath": "/usr/local/cuda/bin/cuda-gdb",
+        }
+    ],
+    "compounds": [
+    {
+        "name": "Joint Debugging",
+        "configurations": ["Python Debugger", "CUDA Debugger"]
+    }
+]
+}
