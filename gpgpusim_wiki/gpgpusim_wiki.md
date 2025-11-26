@@ -12,8 +12,10 @@
         - [SM Core and L1 Cache](#sm-core-and-l1-cache)
         - [L2 Cache (wip)](#l2-cache-wip)
         - [DRAM (wip)](#dram-wip)
+    - [From Binary to cycle()](#from-binary-to-cycle)
+      - [CUDA Flow](#cuda-flow)
+      - [GPGPU-sim Calling Chain](#gpgpu-sim-calling-chain)
     - [PTX Opcode Parsing](#ptx-opcode-parsing)
-      - [Calling Chain: From .ptx to function\_info](#calling-chain-from-ptx-to-function_info)
       - [Centralized Definition](#centralized-definition)
       - [Code Generation with X-Macros](#code-generation-with-x-macros)
     - [Debug: Trace](#debug-trace)
@@ -186,18 +188,18 @@ graph TD;
     ISW["<b>shader_core_ctx::issue_warp()</b><br> 完成所在warp将issue指令的functional simulation，再根据ext_inst->op，跳转到对应的performance simulation handler"];
     EXEC["<b>exec_shader_core_ctx::<br>func_exec_inst()</b><br> 对所有指令执行execute_warp_inst_t，对内存访问指令执行generate_mem_accesses"];
     FUNC["<b>core_t::execute_warp_inst_t()</b><br> 确定warp中的active thread，计算tid，调用ptx_exec_inst，完成功能模拟后更新执行状态"];
-    MEM["<b>warp_inst_t::<br>generate_mem_accesses()</b><br> 对于load/store指令，生成mem_access_t；对于shared memory访问，估计bank conflict导致的最大cycle delay，写入cycles用语lsu cycle中shared_cycle()递减"];
+    MEM["<b>warp_inst_t::<br>generate_mem_accesses()</b><br> 对于load/store指令，生成mem_access_t；对于shared memory访问，估算bank conflict导致的最大delay写入cycles，用于lsu cycle中shared_cycle()递减"];
     PTX["<b>ptx_thread_info::ptx_exec_inst()</b><br> 内含使用X-Macros展开得到的dispatch table，将跳转到对应指令的_impl()完成functioncal simulation"];
 
     %% --- Edge Definitions / Call Chain ---
-    D --issue()--> IS;
+    D --issue();--> IS;
 
     subgraph "Functional Simulation"
       IS --schedulers[j]->cycle();--> SCHE;
-      SCHE --> ISW;
-      ISW --> EXEC;
-      EXEC --> FUNC;
-      EXEC --> MEM;
+      SCHE --m_shader->issue_warp(*m_mem_out, pI, active_mask, warp_id, m_id);--> ISW;
+      ISW --func_exec_inst(**pipe_reg);--> EXEC;
+      EXEC --execute_warp_inst_t(inst);--> FUNC;
+      EXEC --inst.generate_mem_accesses();--> MEM;
       FUNC --m_thread[tid]->ptx_exec_inst(inst, t);--> PTX;
     end
 
@@ -254,11 +256,183 @@ Note:
 
 ##### DRAM (wip)
 
+### From Binary to cycle()
+
+#### CUDA Flow
+```mermaid
+graph LR;
+    %% --- 节点定义 (Node Definitions) ---
+    %% Phase 1: Registration
+    OS["<b>OS Loader</b><br> 系统加载binary，触发 .init_array 段中的代码"];
+
+    Ctor["<b>__cuda_module_ctor()</b><br> nvcc 自动生成的 C++ 静态构造函数。在 main() 执行前运行，负责初始化上下文"];
+
+    RegFat["<b>__cudaRegisterFatBinary()</b><br> 将包含 PTX/SASS 的 Fatbinary Blob 提交给 Driver<br>Input: void* fatCubin<br>Output: void** handle (模块句柄)"];
+
+    RegFunc["<b>__cudaRegisterFunction()</b><br> 建立 Host 函数指针与 Device 代码名的映射<br>Input: handle, host_ptr, device_name<br>Output: Runtime 内部哈希表条目"];
+
+    RegVar["<b>__cudaRegisterVar()</b><br> 注册全局变量 (__device__, __constant__)<br>Input: handle, host_var_ptr, name, size"];
+
+    %% Phase 2: Execution
+    Main["<b>int main()</b><br> 用户程序入口。此时 Runtime 已知晓所有 Kernel 信息"];
+
+    UserCall["<b>Kernel Syntax</b><br> 用户代码: kernel<<<Dg, Db>>>(args)<br>编译器将其展开为 Runtime API 调用"];
+
+    Launch["<b>cudaLaunchKernel()</b><br> 统一的 Kernel 启动 API (或 cudaLaunch 组合)<br>Input: func_ptr (Host指针), grid, block, args<br>Output: 向 Driver 发送 Launch 请求"];
+
+    Lookup["<b>Runtime Lookup</b><br> Runtime 使用 func_ptr 在内部哈希表中查找对应的 device_name (由 Phase 1 注册)"];
+
+    DriverExec["<b>cuLaunchKernel()</b><br> Driver API。驱动程序调度真正的硬件指令 (SASS) 到 GPU 执行"];
+
+    %% --- 边定义 (Edge Definitions / Call Chain) ---
+    
+    %% Phase 1: Register Chain
+    OS --> Ctor;
+    Ctor --> RegFat;
+    RegFat --> RegFunc;
+    RegFat --> RegVar;
+
+    %% Link to Phase 2
+    RegFunc --> Main;
+    RegVar --> Main;
+
+    %% Phase 2: Execution Chain
+    Main --> UserCall;
+    UserCall --> Launch;
+    Launch --> Lookup;
+    Lookup --> DriverExec;
+
+    %% Data Dependency (Logical Link)
+    RegFunc -.-> Lookup;
+
+    %% --- 子图分组 (Subgraphs) ---
+    subgraph Phase 1: Registration
+        OS;
+        Ctor;
+        RegFat;
+        RegFunc;
+        RegVar;
+    end
+
+    subgraph Phase 2: Execution
+        Main;
+        UserCall;
+        Launch;
+        Lookup;
+        DriverExec;
+    end
+```
+#### GPGPU-sim Calling Chain
+
+```mermaid
+graph TD;
+    %% --- 节点定义 (Node Definitions) ---
+    %% Root Entry
+    Entry["<b>__cudaRegisterFatBinary(void *fatCubin)</b><br> CUDA 运行时入口：注册 fatbin，返回 fatbin handle"];
+    
+    Internal["<b>cudaRegisterFatBinaryInternal(...)</b><br> 内部包装"];
+    
+    Impl["<b>cudaRegisterFatBiaryInternal_impl(...)</b><br> 核心注册逻辑：确保上下文就绪，注册 fatbin，首次触发代码提取"];
+
+    FuncEntry["<b>__cudaRegisterFunction(...)</b><br> Host 端函数注册入口"];
+
+    %% --- Subgraph: Initialization ---
+    InitCtx["<b>GPGPU_Context()</b><br>"];
+    InitSim["<b>GPGPUSim_Context(ctx)</b><br>"];
+    SimInit["<b>gpgpu_context::GPGPUSim_Init()</b><br> 完成硬件模块配置与pthread启动"];
+
+    %% --- Subgraph: PTX Extraction (Modern Path) ---
+    RegFatAPI["<b>api->cuobjdumpRegisterFatBinary(...)</b><br> 记录句柄映射；若 handle==1 则触发 cuobjdumpInit"];
+
+    DumpInit["<b>cuda_runtime_api::cuobjdumpInit()</b><br> 注册回调函数: auto ctx_extract_code_func = [=]() { extract_code_using_cuobjdump(); };"];
+
+    DumpInitInt["<b>cuda_runtime_api::cuobjdumpInit_internal()</b><br>"];
+
+    Extract["<b>extract_code_using_cuobjdump()</b><br> 注册回调函数: auto ctx_extract_ptx_func = [=](CUctx_st *context) {extract_ptx_files_using_cuobjdump(context);};"];
+
+    ExtractWrapper["<b>extract_code_using_cuobjdump_internal()</b><br> 判断是否设置CUOBJDUMP_SIM_FILE，若无则执行cuobjdump"];
+
+    ExtractSingle["<b>extract_ptx_files_using_cuobjdump()<br>extract_ptx_files_using_cuobjdump_internal()</b><br>核心提取逻辑：<br>curr dir/<br>├── _cuobjdump_list_ptx_... <-- [ptx文件名列表]<br>├── my_app.1.sm_75.ptx    <-- [导出ptx]<br>└── my_app.2.sm_80.ptx    <-- [导出ptx]<br>并构建 version_filename 映射表(arch->filename)"];
+
+    %% --- Subgraph: PTX Parsing (Direct File Load) ---
+    RegFunc["<b>cudaRegisterFunctionInternal(...)</b><br> 注册 Kernel 时触发解析"];
+
+    ParseBin["<b>gpgpu_context::cuobjdumpParseBinary(handle)</b><br> 从 version_filename 中找到最匹配当前 GPU 架构的 .ptx 文件名，解析并生成 symbol_table，并注册（context->add_binary）"];
+
+    LoadFile["<b>gpgpu_ptx_sim_load_ptx_from_filename(...)</b><br> 打开并读取选定的 .ptx 文本文件"];
+    PTXParse["<b>init_parser()</b><br> 解析ptx文件，构建ptx_instruction写入function_info，存入symbol_table"];
+
+    PtxDecode["<b>ptx_parser->decode(...) / ptx_parse()</b><br> Bison/Yacc 生成 IR (function_info, symbol_table)"];
+
+    PTXINFOLF["<b>gpgpu_ptx_info_load_from_filename(...)</b><br> 调用 ptxas 并解析 ptxinfo 文件，提取资源使用情况"];
+
+
+    %% --- 边定义 (Edge Definitions / Call Chain) ---
+    
+    %% Main Flow
+    Entry --> Internal;
+    Internal --> Impl;
+
+    %% Initialization Branch
+    Impl --1. 初始化模拟器全局上下文--> InitCtx;
+    Impl --2. 初始化底层 CUDA 上下文 (CUctx_st)--> InitSim;
+    InitSim --> SimInit;
+
+    %% Extraction Branch (Simplified for CUDA > 6.0)
+    Impl --3. 提取ptx (CUDA 4.0+ 默认启用 cuobjdump)--> RegFatAPI;
+    RegFatAPI --> DumpInit;
+    DumpInit --> DumpInitInt;
+    DumpInitInt --> Extract;
+    Extract --> ExtractWrapper;
+    ExtractWrapper --> ExtractSingle;
+
+    %% Parsing Branch (Simplified: No Sections, No PTXPlus)
+    Impl -.-> RegFunc;
+    FuncEntry --> RegFunc;
+    
+    RegFunc --> ParseBin;
+    
+    %% 直接从 ParseBin 到 LoadFile (跳过 Section 查找)
+    ParseBin --> LoadFile;
+    
+    LoadFile --> PTXParse;
+    PTXParse --> PtxDecode;
+    PtxDecode --写回Symbol Table--> PTXParse;
+
+    ParseBin --> PTXINFOLF;
+    %% --- 子图分组 (Subgraphs) ---
+    
+    subgraph Initialization
+        InitCtx;
+        InitSim;
+        SimInit;
+    end
+
+    subgraph PTX_Extraction
+        RegFatAPI;
+        DumpInit;
+        DumpInitInt;
+        Extract;
+        ExtractWrapper;
+        ExtractSingle;
+    end
+
+    subgraph PTX_Parsing
+        RegFunc;
+        ParseBin;
+        LoadFile;
+        PtxDecode;
+        PTXINFOLF;
+        PTXParse;
+    end
+
+    %% 样式调整
+    style ExtractSingle text-align:left,font-family:monospace
+```
 
 ### PTX Opcode Parsing
 
-#### Calling Chain: From .ptx to function_info
-![PTX Opcode Parsing Flow](figs/ptx-parsing-calling-chain.png)
+<!-- ![PTX Opcode Parsing Flow](figs/ptx-parsing-calling-chain.png) -->
 
 #### Centralized Definition
 
