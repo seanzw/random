@@ -95,8 +95,31 @@ __device__ inline void cp_chunk(uint8_t *dst_slot, const uint8_t *src_chunk,
     constexpr int load_bytes = 16;
     static_assert(CHUNK_BYTES % load_bytes == 0,
                   "CHUNK_BYTES must be divisible by load_bytes");
-    for (int b = lane_id * load_bytes; b < CHUNK_BYTES; b += 32 * load_bytes) {
+    // Manually unroll by 4 for better performance in ptx simulation.
+    // In sass, this is automatically unrolled and optimized by first load all
+    // then store.
+    constexpr int unroll_factor = 4;
+    constexpr int unroll_chunk = load_bytes * 32 * unroll_factor;
+    constexpr int num_unrolls = CHUNK_BYTES / unroll_chunk;
+    int b = lane_id * load_bytes;
+    for (int u = 0; u < num_unrolls; ++u, b += unroll_chunk) {
+      float4 values[unroll_factor];
+#pragma unroll
+      for (int i = 0; i < unroll_factor; ++i) {
+        const float4 *src_ptr = reinterpret_cast<const float4 *>(
+            src_chunk + b + i * 32 * load_bytes);
+        values[i] = *src_ptr;
+      }
+#pragma unroll
+      for (int i = 0; i < unroll_factor; ++i) {
+        float4 *dst_ptr =
+            reinterpret_cast<float4 *>(dst_slot + b + i * 32 * load_bytes);
+        *dst_ptr = values[i];
+      }
+    }
 
+    // Handle remaining part.
+    for (; b < CHUNK_BYTES; b += 32 * load_bytes) {
       const float4 *src_ptr = reinterpret_cast<const float4 *>(src_chunk + b);
       float4 *dst_ptr = reinterpret_cast<float4 *>(dst_slot + b);
       *dst_ptr = *src_ptr;

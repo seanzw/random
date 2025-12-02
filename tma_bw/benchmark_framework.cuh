@@ -184,11 +184,13 @@ public:
 
     float avg_ms = total_ms / num_iters;
     double seconds = avg_ms / 1e3;
-    double gbps = (double)data.get_total_bytes() * REPEAT / seconds / 1e9;
+    double data_size = (double)data.get_total_bytes() * REPEAT;
+    double gbps = data_size / seconds / 1e9;
     check_result(REPEAT, CHUNK_BYTES);
     printf("Passed | Stages=%2d | Chunk=%4d | Warmup=%d | Iters=%d | Time=%.3f "
-           "ms | BW=%.2f GB/s\n",
-           Stages, CHUNK_BYTES, warmup_iters, num_iters, avg_ms, gbps);
+           "ms | Data=%.2f MiB | BW=%.2f GB/s\n",
+           Stages, CHUNK_BYTES, warmup_iters, num_iters, avg_ms,
+           data_size / (1 << 20), gbps);
   }
 
   // Helper to run single stage from integer sequence
