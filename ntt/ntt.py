@@ -109,7 +109,67 @@ def intt_naive(A, p, inv_twiddles):
         a[k] = (a[k] * inv_n) % p
     return a
 
-def poly_mult_ntt_naive(a, b, p, root, twiddles, inv_root, inv_twiddles):
+def ntt_butterfly(a, p, twiddles):
+    """Compute the Number Theoretic Transform (NTT) of a polynomial a
+    using the Cooley-Tukey butterfly algorithm.
+
+    Args:
+        a (list of int): Coefficients of the polynomial to transform.
+        p (int): A prime modulus.
+        twiddles (list of int): Precomputed twiddle factors.
+    
+    Returns:
+        list of int: The NTT of the input polynomial.
+    """
+
+    def bit_reverse_copy(a):
+        n = len(a)
+        result = a.copy()
+        rev_i = 0
+        for i in range(1, n):
+            # Do the bit-reversal addition.
+            bit = n >> 1
+            while rev_i & bit:
+                # We have a 1 in this bit position for carry.
+                rev_i ^= bit
+                bit >>= 1
+            rev_i |= bit
+            if rev_i > i:
+                result[i], result[rev_i] = result[rev_i], result[i]
+        return result
+    
+    n = len(a)
+    A = bit_reverse_copy(a)
+    length = 2
+    while length <= n:
+        half = length // 2
+        step = n // length
+        for i in range(0, n, length):
+            for j in range(half):
+                u = A[i + j]
+                v = (A[i + j + half] * twiddles[j * step]) % p
+                A[i + j] = (u + v) % p
+                A[i + j + half] = (u - v + p) % p
+        length *= 2
+    return A
+
+def intt_butterfly(A, p, inv_twiddles):
+    """Compute the Inverse Number Theoretic Transform (INTT) of a polynomial A
+    using the Cooley-Tukey butterfly algorithm.
+
+    Args:
+        A (list of int): Coefficients of the polynomial in NTT domain.
+        p (int): A prime modulus.
+        inv_twiddles (list of int): Precomputed inverse twiddle factors.
+    """
+    n = len(A)
+    inv_n = mod_inv(n, p)
+    a = ntt_butterfly(A, p, inv_twiddles)
+    for k in range(n):
+        a[k] = (a[k] * inv_n) % p
+    return a
+
+def poly_mult_ntt(a, b, p, root, twiddles, inv_root, inv_twiddles, ntt_impl, intt_impl):
     """Multiply two polynomials a and b using NTT with naive O(n^2) algorithm.
 
     Args:
@@ -121,12 +181,15 @@ def poly_mult_ntt_naive(a, b, p, root, twiddles, inv_root, inv_twiddles):
     """
     n = len(a)
 
-    A = ntt_naive(a, p, twiddles)
-    B = ntt_naive(b, p, twiddles)
+    A = ntt_impl(a, p, twiddles)
+    B = ntt_impl(b, p, twiddles)
+
+    # print("NTT of a:", A)
+    # print("NTT of b:", B)
 
     C = [(A[i] * B[i]) % p for i in range(n)]
 
-    c = intt_naive(C, p, inv_twiddles)
+    c = intt_impl(C, p, inv_twiddles)
 
     return c
 
@@ -186,13 +249,21 @@ def bench_poly_mult():
         print("Polynomial A:", a)
         print("Polynomial B:", b)
 
+    # Benchmark direct multiplication for comparison
+    start = time.time()
+    c_direct = poly_mult_direct(a, b, p)
+    end = time.time()
+
+    print(f"Direct of degree {deg} took {end - start:.6f} seconds.")
+
     root = find_primitive_root(n, p)
     twiddles = gen_twiddles(n, root, p)
     inv_root = mod_inv(root, p)
     inv_twiddles = gen_twiddles(n, inv_root, p)
 
+    # Benchmark NTT naive multiplication
     start = time.time()
-    c_ntt_naive = poly_mult_ntt_naive(a, b, p, root, twiddles, inv_root, inv_twiddles)
+    c_ntt_naive = poly_mult_ntt(a, b, p, root, twiddles, inv_root, inv_twiddles, ntt_naive, intt_naive)
     end = time.time()
 
     # print("real ntt of a:", sympy.ntt(a, p))
@@ -203,19 +274,26 @@ def bench_poly_mult():
 
     print(f"NTT Naive of degree {deg} took {end - start:.6f} seconds.")
  
-    # Benchmark direct multiplication for comparison
-    start = time.time()
-    c_direct = poly_mult_direct(a, b, p)
-    end = time.time()
-
-    print(f"Direct of degree {deg} took {end - start:.6f} seconds.")
- 
     # Verify correctness
     if c_ntt_naive != c_direct:
         print("Mismatch between NTT naive multiplication and direct multiplication!")
         assert(False)
     else:
         print("NTT naive multiplication matches direct multiplication.")
+
+    # Benchmark NTT butterfly multiplication
+    start = time.time()
+    c_ntt_butterfly = poly_mult_ntt(a, b, p, root, twiddles, inv_root, inv_twiddles, ntt_butterfly, intt_butterfly)
+    end = time.time()
+    
+    print(f"NTT Butterfly of degree {deg} took {end - start:.6f} seconds.")
+    
+    # Verify correctness
+    if c_ntt_butterfly != c_direct:
+        print("Mismatch between NTT butterfly multiplication and direct multiplication!")
+        assert(False)
+    else:
+        print("NTT butterfly multiplication matches direct multiplication.")
 
 if __name__ == "__main__":
     bench_poly_mult()
