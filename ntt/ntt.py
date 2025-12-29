@@ -1,4 +1,5 @@
 import sympy
+import numpy as np
 
 def mod_inv(a, p):
     """Compute the modular inverse of a modulo p using Extended Euclidean Algorithm.
@@ -169,6 +170,51 @@ def intt_butterfly(A, p, inv_twiddles):
         a[k] = (a[k] * inv_n) % p
     return a
 
+def ntt_2d_gemm(a, p, twiddles):
+    """Compute the NTT by performing two matrix multiplications.
+    Args:
+        a (list of int): Coefficients of the polynomial to transform.
+        p (int): A prime modulus.
+        twiddles (list of int): Precomputed twiddle factors.
+    
+    Returns:
+        list of int: The NTT of the input polynomial.
+    """
+    n = len(a)
+
+    # Reshape a into sqrt(n) x sqrt(n) matrix
+    m = int(n**0.5)
+    A = np.array(a).reshape((m, m))
+
+    # First matrix multiplication F * A for column NTT
+    T = np.zeros((m, m), dtype=int)
+    for i in range(m):
+        for j in range(m):
+            for k in range(m):
+                T[i][j] = (T[i][j] + twiddles[(m * i * k) % n] * A[k][j]) % p
+
+    # Hadamard product with twiddle factors
+    for i in range(m):
+        for j in range(m):
+            T[i][j] = (T[i][j] * twiddles[(i * j) % n]) % p
+
+    # Second matrix multiplication A * F for row NTT
+    NTT = np.zeros((m, m), dtype=int)
+    for i in range(m):
+        for j in range(m):
+            for k in range(m):
+                NTT[i][j] = (NTT[i][j] + T[i][k] * twiddles[(m * k * j) % n]) % p
+
+    return NTT.T.flatten().tolist()
+
+def intt_2d_gemm(A, p, inv_twiddles):
+    n = len(A)
+    inv_n = mod_inv(n, p)
+    a = ntt_2d_gemm(A, p, inv_twiddles)
+    for k in range(n):
+        a[k] = (a[k] * inv_n) % p
+    return a
+
 def poly_mult_ntt(a, b, p, root, twiddles, inv_root, inv_twiddles, ntt_impl, intt_impl):
     """Multiply two polynomials a and b using NTT with naive O(n^2) algorithm.
 
@@ -184,8 +230,8 @@ def poly_mult_ntt(a, b, p, root, twiddles, inv_root, inv_twiddles, ntt_impl, int
     A = ntt_impl(a, p, twiddles)
     B = ntt_impl(b, p, twiddles)
 
-    # print("NTT of a:", A)
-    # print("NTT of b:", B)
+    print("NTT of a:", A)
+    print("NTT of b:", B)
 
     C = [(A[i] * B[i]) % p for i in range(n)]
 
@@ -234,8 +280,8 @@ def bench_poly_mult():
     import random
     import time
 
-    deg = 1024  # Degree of polynomials
-    # deg = 4  # Degree of polynomials
+    # deg = 2048  # Degree of polynomials
+    deg = 8  # Degree of polynomials
     p = select_prime(deg)
     assert((p - 1) % (deg * 2) == 0)
     assert(sympy.isprime(p))
@@ -294,6 +340,20 @@ def bench_poly_mult():
         assert(False)
     else:
         print("NTT butterfly multiplication matches direct multiplication.")
+
+    # Benchmark NTT 2D GEMM multiplication
+    start = time.time()
+    c_ntt_2d_gemm = poly_mult_ntt(a, b, p, root, twiddles, inv_root, inv_twiddles, ntt_2d_gemm, intt_2d_gemm)
+    end = time.time()
+    
+    print(f"NTT 2D GEMM of degree {deg} took {end - start:.6f} seconds.")
+    
+    # Verify correctness
+    if c_ntt_2d_gemm != c_direct:
+        print("Mismatch between NTT 2D GEMM multiplication and direct multiplication!")
+        assert(False)
+    else:
+        print("NTT 2D GEMM multiplication matches direct multiplication.")
 
 if __name__ == "__main__":
     bench_poly_mult()
