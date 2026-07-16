@@ -15,6 +15,7 @@
     - [From Binary to cycle()](#from-binary-to-cycle)
       - [CUDA Flow](#cuda-flow)
       - [GPGPU-sim Calling Chain](#gpgpu-sim-calling-chain)
+      - [PTX Instruction Lifecycle](#ptx-instruction-lifecycle)
     - [PTX Opcode Parsing](#ptx-opcode-parsing)
       - [Centralized Definition](#centralized-definition)
       - [Code Generation with X-Macros](#code-generation-with-x-macros)
@@ -429,6 +430,115 @@ graph TD;
     %% 样式调整
     style ExtractSingle text-align:left,font-family:monospace
 ```
+
+#### PTX Instruction Lifecycle
+
+本图从上一节 [GPGPU-sim Calling Chain](#gpgpu-sim-calling-chain) 中的
+`ptx_parse()` 节点继续展开。运行期的 `shader_core_ctx::cycle()`、scheduler 和
+functional execution 对应 [SM Core and L1 Cache](#sm-core-and-l1-cache) 图中的
+同名节点。
+
+这里包含三种发生时间不同的处理：
+
+- **PTX parser**：加载 PTX 文件时创建静态 `ptx_instruction` 对象。
+- **function-level pre-decode**：function 准备执行时填写 performance model 使用的
+  `pc/op/in/out/incount/outcount/latency` 等字段。
+- **frontend decode**：simulation 每个 core cycle 的流水线阶段，从 PC 查找候选
+  指令并放入 warp ibuffer。
+
+`PDOM` 是 post-dominator（后支配节点）。对于一个条件分支，从该分支出发的所有
+路径都会经过的最近基本块称为 immediate post-dominator；GPGPU-Sim 通常把它的
+首条指令 PC 作为 warp 分支后的 reconvergence PC。当前 `do_pdom()` 还包含逐条
+执行 `pre_decode()`、更新 cached copy 和 register allocation。
+
+Phase 2 采用延迟触发。PTX load 完成后，所有 function 都停留在“静态指令和全局
+PC 已准备好”的状态：
+
+- entry kernel 由应用的 launch API 触发；Runtime API 的 `cudaLaunchKernel()`、
+  legacy `cudaLaunch()` 和 Driver API 的 `cuLaunchKernel()` 最终汇合到 simulator 的
+  `cudaLaunchInternal()`；
+- device function 由一条 CALL 指令执行到 `call_impl()` 时触发。
+
+```mermaid
+flowchart TD
+    ExistingParse["[GPGPU-sim Calling Chain]<br/>PTX_Parsing → ptx_parse()"]
+    ExistingCore["[SM Core and L1 Cache]<br/>shader_core_ctx::cycle()"]
+    ExistingIssue["[SM Core and L1 Cache]<br/>issue_warp() → ptx_exec_inst()"]
+    ExistingLaunch["[CUDA Flow]<br/>应用调用 launch API<br/>cudaLaunchKernel() / cudaLaunch() / cuLaunchKernel()"]
+    SimLaunch["GPGPU-Sim 替代 CUDA 动态库<br/>Runtime/Driver wrapper<br/>→ cudaLaunchInternal()"]
+    ExistingCall["[SM Core and L1 Cache]<br/>ptx_exec_inst() 执行 CALL opcode"]
+
+    subgraph Load["1. PTX 加载：创建静态指令"]
+        Parse["ptx_parse()<br/>Bison parser 执行 semantic actions"]
+        Static["ptx_recognizer::add_instruction()<br/>new static ptx_instruction(...)，保存 opcode/operand/source<br/>end_function() 完成当前 function"]
+        Assemble["function_info::ptx_assemble()<br/>分配全局 PC、建立 instruction memory、解析 branch target"]
+        PCMap["全局 PC → static instruction 映射"]
+        Ready["function_info 等待运行期触发<br/>static instructions 和全局 PC 已准备好"]
+        Parse --> Static --> Assemble --> PCMap --> Ready
+    end
+
+    subgraph Prepare["2. Function 准备：一次性 pre-decode"]
+        EntryStart["入口 A：entry kernel<br/>cudaLaunchInternal() 创建 grid 后"]
+        CalleeStart["入口 B：device function<br/>call_impl() 进入目标 function 前"]
+        PDOM["function_info::do_pdom()<br/>构造 CFG、PDOM 和 reconvergence 信息"]
+        Predecode["ptx_instruction::pre_decode()<br/>填写 pc/op/in/out/counts/latency"]
+        Update["update_dyn_inst()<br/>用 pre-decode 后的 static instruction<br/>更新同一 PC 已缓存的 dynamic copy"]
+        PrepareSpacer ~~~ EntryStart
+        PrepareSpacer ~~~ CalleeStart
+        EntryStart --> PDOM
+        CalleeStart --> PDOM
+        PDOM --> Predecode --> Update
+    end
+
+    subgraph Runtime["3. 每个 core cycle：frontend decode 与 issue"]
+        PrepareSpacer["<br/>"]
+        Decode["shader_core_ctx::decode()<br/>查询 pc，再查询相邻的 pc + pI1→isize"]
+        Lookup["get_next_inst(pc)<br/>→ gpgpu_context::ptx_fetch_inst(pc)"]
+        Manager["dyn_ptx_inst_manager::get_or_allocate()<br/>key = host simulator worker + PC"]
+        Copy["dynamic PTX copy<br/>首次访问该 worker/PC 时创建，后续复用"]
+        IBuffer["warp.ibuffer_fill()<br/>保存候选指令指针"]
+        Scheduler["scheduler_unit::cycle()<br/>读取 ibuffer 候选指令"]
+        Current{"SIMT stack 当前 PC<br/>等于候选指令 pI→pc？"}
+        Flush["control-hazard recovery<br/>清空 ibuffer，从正确 PC 重新 fetch"]
+        Issue["scoreboard/resource check<br/>→ shader_core_ctx::issue_warp()"]
+
+        ExistingCore --> Decode --> Lookup --> Manager --> Copy --> IBuffer --> Scheduler --> Current
+        Current -- Yes --> Issue --> ExistingIssue
+        Current -- No --> Flush
+    end
+
+    ExistingParse --> Parse
+    Ready -. "entry kernel 等待 host launch" .-> EntryStart
+    Ready -. "device function 等待 CALL 实际执行" .-> CalleeStart
+    ExistingLaunch --> SimLaunch --> EntryStart
+    ExistingCall --> CalleeStart
+    Predecode -. "entry kernel：core simulation 在 pre-decode 后开始" .-> ExistingCore
+    Update -. "缓存对象地址不变，内部字段被刷新" .-> Copy
+    PCMap -. "A 的末指令与 B 的首指令可在全局表中相邻；decode 不检查 function 边界" .-> Lookup
+
+    style PrepareSpacer fill:transparent,stroke:transparent,color:transparent
+```
+
+关键时间关系：
+
+1. `ptx_assemble()` 在 parser 处理完一个 function 时运行，先让静态指令获得全局
+   PC。当前实现由 `do_pdom()` 执行 pre-decode。
+2. entry kernel 在 `cudaLaunchInternal()` 中执行 `do_pdom()`；被调用的 device
+   function 在 `call_impl()` 进入目标 function 前执行 `do_pdom()`。
+3. `shader_core_ctx::decode()` 每次需要向 ibuffer 填指令时都会调用
+   `get_or_allocate()`。manager 只在当前 host worker 第一次访问某个 PC 时创建
+   副本。
+4. 所有 function 的 instruction 都放在同一张全局 PC lookup table 中。例如 A 的
+   最后一条 instruction 位于 `0x178`，B 的第一条 instruction 可能紧接在 `0x180`。
+   `decode()` 查询 A 的 `0x178` 后，还会直接查询
+   `0x178 + pI1->isize = 0x180`，没有检查 `0x178` 是否已经是 A 的末尾。这次 lookup
+   因而取得 B 的首条 instruction；这次 lookup 只来自地址相邻，与 CALL target
+   无关。真正执行 CALL 时，
+   `call_impl()` 仍会先完成 callee 的 `do_pdom()`，随后才进入 callee。
+5. 对于上述提前创建的对象，`update_dyn_inst()` 会把 pre-decode 后的 static
+   instruction 复制到同一 PC 已缓存的 dynamic copy 中，缓存对象地址不变。
+6. scheduler 在读取 operands 和查询 scoreboard 前比较 SIMT-stack PC 与
+   `pI->pc`。PC 不匹配的候选指令会被 flush。
 
 ### PTX Opcode Parsing
 
