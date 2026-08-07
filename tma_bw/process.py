@@ -70,8 +70,11 @@ def parse_benchmark_file(filename):
             continue
 
         # Check for stage data line (handle both old format and new "Passed |" format)
+        number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
         stage_match = re.search(
-            r"(?:Passed\s*\|\s*)?Stages=\s*(\d+)\s*\|\s*Chunk=\s*(\d+)\s*\|.*?Time=([\d.]+)\s*ms\s*\|\s*BW=([\d.]+)\s*GB/s",
+            rf"(?:Passed\s*\|\s*)?Stages=\s*(\d+)\s*\|\s*"
+            rf"Chunk=\s*(\d+)\s*\|.*?Time=\s*({number})\s*ms\s*\|"
+            rf".*?BW=\s*({number})\s*GB/s",
             line,
         )
         if stage_match and current_chunk is not None and current_benchmark:
@@ -126,6 +129,15 @@ def main():
         default=5.6,
         help="Peak bandwidth in TB/s (default: 5.6)",
     )
+    parser.add_argument(
+        "--title",
+        help="Optional figure title (for example, the GPU and Slurm job ID)",
+    )
+    parser.add_argument(
+        "--bandwidth-only",
+        action="store_true",
+        help="Plot bandwidth without normalizing against an unrelated peak",
+    )
 
     args = parser.parse_args()
 
@@ -169,13 +181,22 @@ def main():
     for key, title in available_configs:
         print(f"  - {title}")
 
-    # Create the visualization with dynamic number of rows based on available configurations
-    # Each row represents a benchmark type, columns are bandwidth and utilization
-    fig, axes = plt.subplots(num_configs, 2, figsize=(16, 5 * num_configs))
+    # Each row is a benchmark type. L2 plots intentionally omit utilization:
+    # unlike HBM, there is no product-level peak-bandwidth reference for L2.
+    num_columns = 1 if args.bandwidth_only else 2
+    fig, axes = plt.subplots(
+        num_configs,
+        num_columns,
+        figsize=(8 * num_columns, 5 * num_configs),
+        squeeze=False,
+    )
 
-    # Handle the case where there's only one configuration (axes won't be 2D)
-    if num_configs == 1:
-        axes = axes.reshape(1, -1)
+    if args.bandwidth_only:
+        bandwidth_color_max = max(
+            np.nanmax(benchmark_data[key]) for key, _ in available_configs
+        )
+    else:
+        bandwidth_color_max = peak_bw_tb * 1000
 
     for row, (benchmark_key, title) in enumerate(available_configs):
         if benchmark_key in benchmark_data:
@@ -186,9 +207,12 @@ def main():
 
             # Bandwidth heatmap - Column 0
             ax_bw = axes[row, 0]
-            max_bw = peak_bw_tb * 1000  # Convert TB/s to GB/s
             im_bw = ax_bw.imshow(
-                bw_matrix, cmap="viridis", aspect="auto", vmin=0, vmax=max_bw
+                bw_matrix,
+                cmap="viridis",
+                aspect="auto",
+                vmin=0,
+                vmax=bandwidth_color_max,
             )
             ax_bw.set_xticks(range(len(stages)))
             ax_bw.set_xticklabels(stages, fontsize=12)
@@ -212,7 +236,9 @@ def main():
                             va="center",
                             fontweight="bold",
                             fontsize=14,
-                            color="white" if bw_matrix[i, j] < max_bw / 2 else "black",
+                            color="white"
+                            if bw_matrix[i, j] < bandwidth_color_max / 2
+                            else "black",
                         )
 
             # Add colorbar for bandwidth
@@ -220,43 +246,55 @@ def main():
             cbar_bw.set_label("Bandwidth (GB/s)", fontsize=12, fontweight="bold")
             cbar_bw.ax.tick_params(labelsize=10)
 
-            # Utilization heatmap - Column 1
-            ax_util = axes[row, 1]
-            im_util = ax_util.imshow(
-                util_matrix, cmap="plasma", aspect="auto", vmin=0, vmax=100
-            )
-            ax_util.set_xticks(range(len(stages)))
-            ax_util.set_xticklabels(stages, fontsize=12)
-            ax_util.set_yticks(range(len(chunk_sizes)))
-            ax_util.set_yticklabels([f"{cs}B" for cs in chunk_sizes], fontsize=12)
-            ax_util.set_xlabel("Number of Stages", fontsize=14, fontweight="bold")
-            ax_util.set_ylabel("Chunk Size", fontsize=14, fontweight="bold")
-            ax_util.set_title(
-                f"{title} - Utilization (%)", fontsize=16, fontweight="bold"
-            )
+            if not args.bandwidth_only:
+                # HBM-reference utilization heatmap - Column 1
+                ax_util = axes[row, 1]
+                im_util = ax_util.imshow(
+                    util_matrix, cmap="plasma", aspect="auto", vmin=0, vmax=100
+                )
+                ax_util.set_xticks(range(len(stages)))
+                ax_util.set_xticklabels(stages, fontsize=12)
+                ax_util.set_yticks(range(len(chunk_sizes)))
+                ax_util.set_yticklabels(
+                    [f"{cs}B" for cs in chunk_sizes], fontsize=12
+                )
+                ax_util.set_xlabel(
+                    "Number of Stages", fontsize=14, fontweight="bold"
+                )
+                ax_util.set_ylabel("Chunk Size", fontsize=14, fontweight="bold")
+                ax_util.set_title(
+                    f"{title} - HBM Peak (%)", fontsize=16, fontweight="bold"
+                )
 
-            # Add text annotations for utilization
-            for i in range(len(chunk_sizes)):
-                for j in range(len(stages)):
-                    if not np.isnan(util_matrix[i, j]):
-                        ax_util.text(
-                            j,
-                            i,
-                            f"{util_matrix[i, j]:.1f}%",
-                            ha="center",
-                            va="center",
-                            fontweight="bold",
-                            fontsize=14,
-                            color="white" if util_matrix[i, j] < 50 else "black",
-                        )
+                for i in range(len(chunk_sizes)):
+                    for j in range(len(stages)):
+                        if not np.isnan(util_matrix[i, j]):
+                            ax_util.text(
+                                j,
+                                i,
+                                f"{util_matrix[i, j]:.1f}%",
+                                ha="center",
+                                va="center",
+                                fontweight="bold",
+                                fontsize=14,
+                                color="white"
+                                if util_matrix[i, j] < 50
+                                else "black",
+                            )
 
-            # Add colorbar for utilization
-            cbar_util = plt.colorbar(im_util, ax=ax_util, label="Utilization (%)")
-            cbar_util.set_label("Utilization (%)", fontsize=12, fontweight="bold")
-            cbar_util.ax.tick_params(labelsize=10)
+                cbar_util = plt.colorbar(
+                    im_util, ax=ax_util, label="HBM peak reference (%)"
+                )
+                cbar_util.set_label(
+                    "HBM peak reference (%)", fontsize=12, fontweight="bold"
+                )
+                cbar_util.ax.tick_params(labelsize=10)
 
-    plt.tight_layout()
-    # plt.suptitle('Memory Bandwidth and Utilization Comparison', fontsize=16, y=0.98)
+    if args.title:
+        fig.suptitle(args.title, fontsize=22, fontweight="bold", y=1.0)
+        plt.tight_layout(rect=(0, 0, 1, 0.998))
+    else:
+        plt.tight_layout()
 
     # Save the figure
     plt.savefig(args.output, dpi=300, bbox_inches="tight")
@@ -267,6 +305,9 @@ def main():
     for benchmark_key, title in available_configs:
         if benchmark_key in benchmark_data:
             bw_matrix = benchmark_data[benchmark_key]
+            if np.all(np.isnan(bw_matrix)):
+                print(f"\n{title}: no valid measurements")
+                continue
             peak_bw = np.nanmax(bw_matrix)
             peak_util = peak_bw / 1000 / peak_bw_tb * 100
 
@@ -277,7 +318,11 @@ def main():
 
             print(f"\n{title}:")
             print(f"  Peak bandwidth: {peak_bw:.2f} GB/s")
-            print(f"  Peak utilization: {peak_util:.1f}% of {peak_bw_tb} TB/s")
+            if not args.bandwidth_only:
+                print(
+                    f"  Peak HBM reference: {peak_util:.1f}% of "
+                    f"{peak_bw_tb} TB/s"
+                )
             print(f"  Best config: {best_chunk}B chunk, {best_stage} stages")
 
 

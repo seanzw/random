@@ -1,7 +1,24 @@
 NVCC_FLAGS = -std=c++17 -arch=sm_120 -O3 -lcudart
+H200_NVCC_FLAGS ?= -std=c++17 -arch=sm_90a -O3 -lcudart -Xptxas=-dlcm=cg
 
 bandwidth_test.out: bandwidth_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
 	nvcc $(NVCC_FLAGS) bandwidth_test.cu -o $@
+
+# Hopper binaries with disjoint cache-capacity regimes. The 40 MiB L2 working
+# set fits in H200 L2 but exceeds per-SM L1 capacity; -dlcm=cg bypasses L1 for
+# compiler-generated normal loads. The 1 GiB HBM stream is much larger than L2
+# and is traversed only once per kernel launch.
+bandwidth_test_h200_l2.out: bandwidth_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
+	nvcc $(H200_NVCC_FLAGS) -DBENCH_L2_MODE=1 -DBENCH_FORCE_CG=1 -DBENCH_TOTAL_MIB=40 -DBENCH_REPEAT=32 bandwidth_test.cu -o $@
+
+bandwidth_test_h200_hbm.out: bandwidth_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
+	nvcc $(H200_NVCC_FLAGS) -DBENCH_HBM_MODE=1 -DBENCH_FORCE_CG=1 -DBENCH_TOTAL_MIB=1024 -DBENCH_REPEAT=1 -DBENCH_REALLOCATE_EACH_CONFIG=0 -DBENCH_FLUSH_L2_MIB=256 bandwidth_test.cu -o $@
+
+h200-l2: bandwidth_test_h200_l2.out
+
+h200-hbm: bandwidth_test_h200_hbm.out
+
+h200: h200-l2 h200-hbm
 
 # Isolated test targets
 tma_test.out: bandwidth_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
@@ -83,4 +100,4 @@ run-simple-all: simple_normal_load_test.out simple_tma_test.out simple_cp_async_
 clean:
 	rm -f *.out *.ptx
 
-.PHONY: all ptx run-tma run-cp-async run-normal-load run-simple-normal-load run-simple-tma run-simple-cp-async run-all run-simple-all clean
+.PHONY: all h200 h200-l2 h200-hbm ptx run-tma run-cp-async run-normal-load run-simple-normal-load run-simple-tma run-simple-cp-async run-all run-simple-all clean

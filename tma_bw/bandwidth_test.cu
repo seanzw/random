@@ -2,9 +2,45 @@
 #include "benchmark_framework.cuh"
 #include "kernel_wrappers.cuh"
 
+#ifndef BENCH_TOTAL_MIB
+#define BENCH_TOTAL_MIB 64
+#endif
+
+#ifndef BENCH_REPEAT
+#define BENCH_REPEAT 16
+#endif
+
 int main() {
-  const size_t total_bytes = size_t(64) * 1024 * 1024; // 64 MiB
-  constexpr int repeat = 16;
+  const size_t total_bytes = size_t(BENCH_TOTAL_MIB) * 1024 * 1024;
+  constexpr int repeat = BENCH_REPEAT;
+
+#if defined(BENCH_L2_MODE)
+  constexpr const char *benchmark_mode = "L2-resident";
+#elif defined(BENCH_HBM_MODE)
+  constexpr const char *benchmark_mode = "HBM-streaming";
+#else
+  constexpr const char *benchmark_mode = "legacy-mixed";
+#endif
+
+  int l2_bytes = 0;
+  int persisting_l2_bytes = 0;
+  check(cudaDeviceGetAttribute(&l2_bytes, cudaDevAttrL2CacheSize, 0),
+        "get L2 cache size");
+  check(cudaDeviceGetAttribute(&persisting_l2_bytes,
+                               cudaDevAttrMaxPersistingL2CacheSize, 0),
+        "get persisting L2 cache size");
+  printf("Benchmark mode: %s\n", benchmark_mode);
+  printf("Working set: %d MiB | Repeat: %d | Logical bytes/launch: %zu\n",
+         BENCH_TOTAL_MIB, repeat, total_bytes * repeat);
+  printf("Device L2: %.2f MiB | Max persisting L2: %.2f MiB\n",
+         l2_bytes / double(1 << 20), persisting_l2_bytes / double(1 << 20));
+#if defined(BENCH_FORCE_CG)
+  printf("Compiler-generated global loads: cache-global (L2 only)\n");
+#endif
+#if BENCH_FLUSH_L2_MIB > 0
+  printf("L2 eviction before each timed launch: %d MiB (outside timing)\n",
+         BENCH_FLUSH_L2_MIB);
+#endif
 
   // Define all power of two sequences at the beginning to avoid duplicate declarations
   using power_of_two_sequence_2 = power_of_two_sequence<2, 32>;

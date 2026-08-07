@@ -6,6 +6,31 @@
 
 #include "kernels_common.cuh"
 
+#ifndef BENCH_REALLOCATE_EACH_CONFIG
+#define BENCH_REALLOCATE_EACH_CONFIG 1
+#endif
+
+#ifndef BENCH_FLUSH_L2_MIB
+#define BENCH_FLUSH_L2_MIB 0
+#endif
+
+#if BENCH_FLUSH_L2_MIB > 0
+__global__ void flush_l2_kernel(const uint4 *__restrict__ data,
+                                size_t num_vectors,
+                                unsigned long long *__restrict__ sinks) {
+  const size_t thread = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+  const size_t stride = size_t(gridDim.x) * blockDim.x;
+  unsigned long long sum = 0;
+  for (size_t i = thread; i < num_vectors; i += stride) {
+    const uint4 value = data[i];
+    sum += value.x + value.y + value.z + value.w;
+  }
+  // Every thread stores its reduction so none of the eviction loads can be
+  // removed as dead code.
+  sinks[thread] = sum;
+}
+#endif
+
 // Error checking utility
 static void check(cudaError_t e, const char *msg) {
   if (e != cudaSuccess) {
@@ -21,6 +46,12 @@ private:
   unsigned long long *d_sink;
   size_t total_bytes;
   int num_sms;
+#if BENCH_FLUSH_L2_MIB > 0
+  uint4 *d_cache_flush;
+  unsigned long long *d_cache_flush_sinks;
+  int cache_flush_blocks;
+  static constexpr int cache_flush_threads = 256;
+#endif
 
 public:
   uint32_t gen_src_value(int i) {
@@ -38,6 +69,20 @@ public:
     check(cudaMalloc(&d_src, total_bytes), "malloc d_src");
     check(cudaMalloc(&d_sink, sizeof(unsigned long long) * num_sms),
           "malloc d_sink");
+
+#if BENCH_FLUSH_L2_MIB > 0
+    const size_t cache_flush_bytes =
+        size_t(BENCH_FLUSH_L2_MIB) * 1024 * 1024;
+    cache_flush_blocks = num_sms * 4;
+    check(cudaMalloc(&d_cache_flush, cache_flush_bytes),
+          "malloc L2 eviction buffer");
+    check(cudaMalloc(&d_cache_flush_sinks,
+                     sizeof(unsigned long long) * cache_flush_blocks *
+                         cache_flush_threads),
+          "malloc L2 eviction sinks");
+    check(cudaMemset(d_cache_flush, 1, cache_flush_bytes),
+          "initialize L2 eviction buffer");
+#endif
 
     // Initialize data
     std::vector<uint8_t> h_src(total_bytes);
@@ -68,6 +113,22 @@ public:
   ~TestData() {
     cudaFree(d_src);
     cudaFree(d_sink);
+#if BENCH_FLUSH_L2_MIB > 0
+    cudaFree(d_cache_flush);
+    cudaFree(d_cache_flush_sinks);
+#endif
+  }
+
+  void flush_l2() {
+#if BENCH_FLUSH_L2_MIB > 0
+    const size_t cache_flush_bytes =
+        size_t(BENCH_FLUSH_L2_MIB) * 1024 * 1024;
+    flush_l2_kernel<<<cache_flush_blocks, cache_flush_threads>>>(
+        d_cache_flush, cache_flush_bytes / sizeof(uint4),
+        d_cache_flush_sinks);
+    check(cudaGetLastError(), "L2 flush launch");
+    check(cudaDeviceSynchronize(), "L2 flush sync");
+#endif
   }
 
   const uint8_t *get_src() const { return d_src; }
@@ -145,8 +206,10 @@ public:
     kernel_func.template set_shmem_size<Stages, CHUNK_BYTES, REPEAT>(
         shmem_bytes + 4096);
 
-    // Reallocate data to reset cache.
+#if BENCH_REALLOCATE_EACH_CONFIG
+    // Reallocate data before warming the deliberately cache-resident mode.
     data.realloc();
+#endif
 
     // Warm-up
     for (int warmup = 0; warmup < warmup_iters; ++warmup) {
@@ -162,6 +225,11 @@ public:
     cudaEvent_t start, stop;
 
     for (int iter = 0; iter < num_iters; ++iter) {
+#if BENCH_FLUSH_L2_MIB > 0
+      // Evict the source working set before each measurement. This kernel and
+      // its synchronization are deliberately outside the timed interval.
+      data.flush_l2();
+#endif
       check(cudaEventCreate(&start), "event create start");
       check(cudaEventCreate(&stop), "event create stop");
       check(cudaEventRecord(start), "record start");
