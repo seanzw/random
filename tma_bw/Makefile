@@ -1,4 +1,5 @@
 NVCC_FLAGS = -std=c++17 -arch=sm_120 -O3 -lcudart
+B200_NVCC_FLAGS = -std=c++17 -arch=sm_100a -O3 -lcudart
 
 bandwidth_test.out: bandwidth_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
 	nvcc $(NVCC_FLAGS) bandwidth_test.cu -o $@
@@ -19,6 +20,9 @@ simple_normal_load_test.out: simple_normal_load_test.cu kernels_common.cuh cp_ke
 
 simple_tma_test.out: simple_tma_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
 	nvcc $(NVCC_FLAGS) simple_tma_test.cu -o $@
+
+b200_tma_test.out: b200_tma_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
+	nvcc $(B200_NVCC_FLAGS) b200_tma_test.cu -o $@
 
 simple_cp_async_test.out: simple_cp_async_test.cu kernels_common.cuh cp_kernels.cuh benchmark_framework.cuh kernel_wrappers.cuh
 	nvcc $(NVCC_FLAGS) simple_cp_async_test.cu -o $@
