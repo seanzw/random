@@ -134,6 +134,9 @@ was unavailable on the test cluster (`ERR_NVGPUCTRPERM`), so the two regimes are
 separated through cache policy, capacity, warm-up, explicit eviction, and access
 pattern rather than a reported hardware hit-rate counter.
 
+The H200 distributed-shared-memory reverse-engineering benchmark now lives in
+the standalone [`../dsm_bw`](../dsm_bw) project.
+
 ## GPU Compatibility
 
 - **Default Architecture**: sm_120 (configurable in Makefile)

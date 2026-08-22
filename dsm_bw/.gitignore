@@ -1,0 +1,10 @@
+__pycache__/
+*.out
+*.sass
+dsm_slurm_*.out
+results/
+
+# Site-local scheduler configuration may contain account, partition, QoS,
+# reservation, host, or filesystem details.
+h200.sbatch
+submit_h200.sh
